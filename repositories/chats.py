@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from sqlalchemy import func, select
 
 from db.engine import get_session_factory
@@ -91,8 +93,12 @@ async def get_user(user_id: int) -> User | None:
 
 
 async def set_user_banned(
-    user_id: int, banned: bool, reason: str | None = None
+    user_id: int,
+    banned: bool,
+    reason: str | None = None,
+    ban_until: int | None = None,
 ) -> bool:
+    now = int(time.time())
     factory = get_session_factory()
     async with factory() as session:
         user = await session.get(User, user_id)
@@ -102,11 +108,15 @@ async def set_user_banned(
                 first_name=str(user_id),
                 is_banned=banned,
                 notes=reason if banned else None,
+                banned_at=now if banned else None,
+                ban_until=ban_until if banned else None,
             )
             session.add(user)
         else:
             user.is_banned = banned
             user.notes = reason if banned else None
+            user.banned_at = now if banned else None
+            user.ban_until = ban_until if banned else None
         await session.commit()
         return True
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from db.engine import get_session_factory
 from db.models import Event
@@ -103,3 +103,80 @@ async def count_by_type(chat_id: int, user_id: int) -> dict[str, int]:
             )
         ).all()
         return {etype: cnt for etype, cnt in rows}
+
+
+# ---- cross-chat aggregation (global profile) ----
+
+
+async def global_dick_aggregate(
+    user_id: int,
+) -> tuple[int, int, int, int | None, int | None]:
+    """Aggregate /dick events across all chats for a user.
+    Returns (plays, total_grown, total_lost, best_roll, worst_roll)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        plays, grown, lost, best, worst = (
+            await session.execute(
+                select(
+                    func.count(Event.id),
+                    func.coalesce(
+                        func.sum(case((Event.delta > 0, Event.delta), else_=0)), 0
+                    ),
+                    func.coalesce(
+                        func.sum(case((Event.delta < 0, -Event.delta), else_=0)), 0
+                    ),
+                    func.max(Event.delta),
+                    func.min(Event.delta),
+                ).where(Event.user_id == user_id, Event.type == DICK)
+            )
+        ).one()
+        return plays, grown, lost, best, worst
+
+
+async def global_count_by_type(user_id: int) -> dict[str, int]:
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(Event.type, func.count(Event.id))
+                .where(Event.user_id == user_id)
+                .group_by(Event.type)
+            )
+        ).all()
+        return {etype: cnt for etype, cnt in rows}
+
+
+async def global_best_size(user_id: int) -> int:
+    factory = get_session_factory()
+    async with factory() as session:
+        return (
+            await session.execute(
+                select(func.coalesce(func.max(Event.size_after), 0))
+                .where(Event.user_id == user_id)
+            )
+        ).scalar_one()
+
+
+async def global_first_play(user_id: int) -> int | None:
+    factory = get_session_factory()
+    async with factory() as session:
+        return (
+            await session.execute(
+                select(func.min(Event.created_at))
+                .where(Event.user_id == user_id, Event.type != BASELINE)
+            )
+        ).scalar_one()
+
+
+async def global_duel_events(user_id: int) -> list[Event]:
+    factory = get_session_factory()
+    async with factory() as session:
+        return list(
+            (
+                await session.execute(
+                    select(Event).where(
+                        Event.user_id == user_id, Event.type == DUEL
+                    )
+                )
+            ).scalars().all()
+        )

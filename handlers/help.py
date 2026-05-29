@@ -1,31 +1,21 @@
 from aiogram import Router
-from aiogram.filters import Command
-from aiogram.types import BotCommand, Message
+from aiogram.filters import Command, CommandObject
+from aiogram.types import Message
+
+import texts
+from handlers.profile import _send_global_profile
 
 router = Router()
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message) -> None:
-    await message.answer(
-        "👋 Привет! Это бот-игра.\n\n"
-        "Теперь бот может писать тебе в личку — например, чтобы предупредить о "
-        "блокировке рассылки или ответить по обращению в поддержку.\n\n"
-        "Добавь меня в групповой чат и отправь /help, чтобы увидеть список команд."
-    )
+async def cmd_start(message: Message, command: CommandObject) -> None:
+    if command.args == "me" and message.from_user:
+        await _send_global_profile(message, message.from_user.id, message.from_user.first_name)
+        return
+    await message.answer(texts.START)
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    text = (
-        "Команды:\n"
-        "/help — вывести этот текст\n"
-        "/dick — испытать удачу\n"
-        "/duel [ставка] — вызвать на дуэль (ответом на сообщение)\n"
-        "/me — твой профиль и статистика\n"
-        "/top — вывести топ список\n"
-        "/ping — ping-pong\n"
-        "/setbcast — (админам, внутри темы) выбрать тему для рассылок\n"
-        "/unsetbcast — (админам) сбросить тему рассылок"
-    )
-    await message.answer(text)
+    await message.answer(texts.HELP)

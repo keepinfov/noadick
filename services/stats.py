@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from repositories import chats as C
 from repositories import events as E
 from repositories import players as P
 
@@ -117,6 +118,92 @@ async def compute_profile(chat_id: int, user_id: int) -> ProfileStats:
         diseases_caught=diseases,
         current_disease=player.disease_id if player else None,
         exists=player is not None,
+    )
+
+
+@dataclass
+class GlobalChatEntry:
+    chat_id: int
+    title: str
+    size: int
+    rank: int
+
+
+@dataclass
+class GlobalProfileStats:
+    name: str
+    chats: list[GlobalChatEntry]
+    chats_count: int
+    plays: int
+    total_grown: int
+    total_lost: int
+    best_roll: int | None
+    worst_roll: int | None
+    duels_total: int
+    wins: int
+    losses: int
+    winrate: float
+    infections: int
+    best_size_ever: int
+    first_play_ts: int | None
+    is_banned: bool
+    ban_reason: str | None
+    ban_until: int | None
+    exists: bool
+
+
+async def compute_global_profile(user_id: int, name: str | None = None) -> GlobalProfileStats:
+    sizes = await P.user_chat_sizes(user_id)
+    chats: list[GlobalChatEntry] = []
+    for chat_id, title, size in sizes:
+        rank = await P.global_rank_for(user_id, chat_id, size)
+        chats.append(
+            GlobalChatEntry(chat_id=chat_id, title=title or str(chat_id), size=size, rank=rank)
+        )
+
+    plays, grown, lost, best, worst = await E.global_dick_aggregate(user_id)
+    counts = await E.global_count_by_type(user_id)
+    infections = counts.get(E.INFECTION, 0)
+    best_size = await E.global_best_size(user_id)
+    first_play = await E.global_first_play(user_id)
+
+    wins = 0
+    losses = 0
+    for e in await E.global_duel_events(user_id):
+        if bool((e.meta or {}).get("won")):
+            wins += 1
+        else:
+            losses += 1
+    duels_total = wins + losses
+
+    user = await C.get_user(user_id)
+    is_banned = bool(user and user.is_banned)
+    ban_reason = user.notes if user else None
+    ban_until = user.ban_until if user else None
+
+    exists = bool(chats) or plays > 0 or duels_total > 0
+    display_name = name or (user.first_name if user else None) or str(user_id)
+
+    return GlobalProfileStats(
+        name=display_name,
+        chats=chats,
+        chats_count=len(chats),
+        plays=plays,
+        total_grown=grown,
+        total_lost=lost,
+        best_roll=best,
+        worst_roll=worst,
+        duels_total=duels_total,
+        wins=wins,
+        losses=losses,
+        winrate=(wins / duels_total) if duels_total else 0.0,
+        infections=infections,
+        best_size_ever=best_size,
+        first_play_ts=first_play,
+        is_banned=is_banned,
+        ban_reason=ban_reason if is_banned else None,
+        ban_until=ban_until if is_banned else None,
+        exists=exists,
     )
 
 

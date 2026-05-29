@@ -1,6 +1,8 @@
 import random
 import time
 
+import texts
+
 DISEASE_CHANCE = 0.03
 
 
@@ -26,62 +28,34 @@ class Disease:
         self.is_buff = is_buff
 
 
+def _d(
+    d_id: str,
+    days: int,
+    growth_mod: float,
+    duel_mod: float,
+    infect_chance: float,
+    is_buff: bool = False,
+) -> "Disease":
+    name, catch_message = texts.DISEASE_TEXT[d_id]
+    return Disease(
+        d_id=d_id,
+        name=name,
+        days=days,
+        growth_mod=growth_mod,
+        duel_mod=duel_mod,
+        infect_chance=infect_chance,
+        catch_message=catch_message,
+        is_buff=is_buff,
+    )
+
+
 DISEASES = [
-    Disease(
-        d_id="syphilis",
-        name="СИФИЛИС",
-        days=3,
-        growth_mod=0.5,
-        duel_mod=-0.15,
-        infect_chance=0.60,
-        catch_message="ТЫ ПОДХВАТИЛ СИФИЛИС ХАХАХА! Писька гниёт, рост замедлен, в дуэлях штраф. АРГХ!",
-    ),
-    Disease(
-        d_id="fracture",
-        name="ПЕРЕЛОМ ПИСЬКИ",
-        days=2,
-        growth_mod=0.0,
-        duel_mod=-0.10,
-        infect_chance=0.0,
-        catch_message="ТЫ СЛОМАЛ ПИСЬКУ! Гипс на 2 дня. Рост заблокирован, шансы в дуэлях ниже.",
-    ),
-    Disease(
-        d_id="fungus",
-        name="ГРИБОК",
-        days=1,
-        growth_mod=1.0,
-        duel_mod=0.0,
-        infect_chance=0.40,
-        catch_message="У ТЕБЯ ГРИБОК НА ПИСЬКЕ! Чешется и воняет. Заразно! Но расти не мешает.",
-    ),
-    Disease(
-        d_id="valgus",
-        name="ВАЛЬГУСНАЯ ДЕФОРМАЦИЯ",
-        days=2,
-        growth_mod=0.7,
-        duel_mod=-0.05,
-        infect_chance=0.0,
-        catch_message="ПИСЬКА ИСКРИВИЛАСЬ! Как турецкий ятаган. Теперь она под углом 45 градусов.",
-    ),
-    Disease(
-        d_id="piercing",
-        name="ПИРСИНГ",
-        days=3,
-        growth_mod=1.10,
-        duel_mod=0.05,
-        infect_chance=0.0,
-        catch_message="ТЕБЕ СДЕЛАЛИ ИНТИМНЫЙ ПИРСИНГ! +10% к росту и +5% к шансам в дуэлях. Стильно!",
-        is_buff=True,
-    ),
-    Disease(
-        d_id="gonorrhea",
-        name="ГОНОРЕЯ",
-        days=3,
-        growth_mod=0.6,
-        duel_mod=-0.10,
-        infect_chance=0.50,
-        catch_message="У ТЕБЯ ГОНОРЕЯ! Жжение при использовании /dick. Заразная штука.",
-    ),
+    _d("syphilis", days=3, growth_mod=0.5, duel_mod=-0.15, infect_chance=0.60),
+    _d("fracture", days=2, growth_mod=0.0, duel_mod=-0.10, infect_chance=0.0),
+    _d("fungus", days=1, growth_mod=1.0, duel_mod=0.0, infect_chance=0.40),
+    _d("valgus", days=2, growth_mod=0.7, duel_mod=-0.05, infect_chance=0.0),
+    _d("piercing", days=3, growth_mod=1.10, duel_mod=0.05, infect_chance=0.0, is_buff=True),
+    _d("gonorrhea", days=3, growth_mod=0.6, duel_mod=-0.10, infect_chance=0.50),
 ]
 
 DISEASE_BY_ID = {d.id: d for d in DISEASES}
@@ -152,4 +126,4 @@ def disease_tag(player: dict) -> str:
     if not d:
         return ""
     days_left = d.days - int((time.time() - disease["caught_at"]) / 86400)
-    return f" [{d.name} ещё {max(0, days_left)} дн]"
+    return texts.disease_tag_text(d.name, max(0, days_left))

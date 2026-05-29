@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import texts
 from db.engine import get_session_factory
 from db.models import AuditLog
 from models.disease import DISEASE_BY_ID
@@ -62,7 +63,7 @@ async def set_size(
         actor_id, "set_size", target_chat=chat_id, target_user=user_id,
         payload={"size": size},
     )
-    return ActionResult(True, f"Размер {p.name} установлен в {size} см.")
+    return ActionResult(True, texts.res_size_set(p.name, size))
 
 
 async def add_size(
@@ -82,7 +83,7 @@ async def add_size(
         actor_id, "add_size", target_chat=chat_id, target_user=user_id,
         payload={"delta": delta, "size": new_size},
     )
-    return ActionResult(True, f"Размер {p.name}: {new_size} см ({delta:+d}).")
+    return ActionResult(True, texts.res_size_add(p.name, new_size, delta))
 
 
 async def set_name(
@@ -94,14 +95,14 @@ async def set_name(
         actor_id, "set_name", target_chat=chat_id, target_user=user_id,
         payload={"name": name},
     )
-    return ActionResult(True, f"Имя изменено на {name}.")
+    return ActionResult(True, texts.res_name_set(name))
 
 
 async def give_disease(
     actor_id: int, chat_id: int, user_id: int, disease_id: str
 ) -> ActionResult:
     if disease_id not in DISEASE_BY_ID:
-        return ActionResult(False, f"Неизвестная болезнь: {disease_id}")
+        return ActionResult(False, texts.res_unknown_disease(disease_id))
     async with get_chat_lock(chat_id):
         await players_repo.set_player_fields(
             chat_id, user_id, disease_id=disease_id, disease_caught_at=now_ts()
@@ -110,7 +111,7 @@ async def give_disease(
         actor_id, "give_disease", target_chat=chat_id, target_user=user_id,
         payload={"disease_id": disease_id},
     )
-    return ActionResult(True, f"Выдана болезнь: {DISEASE_BY_ID[disease_id].name}.")
+    return ActionResult(True, texts.res_disease_given(DISEASE_BY_ID[disease_id].name))
 
 
 async def cure(actor_id: int, chat_id: int, user_id: int) -> ActionResult:
@@ -121,7 +122,7 @@ async def cure(actor_id: int, chat_id: int, user_id: int) -> ActionResult:
     await _audit(
         actor_id, "cure", target_chat=chat_id, target_user=user_id,
     )
-    return ActionResult(True, "Игрок вылечен.")
+    return ActionResult(True, texts.RES_CURED)
 
 
 async def reset_player(actor_id: int, chat_id: int, user_id: int) -> ActionResult:
@@ -139,7 +140,7 @@ async def reset_player(actor_id: int, chat_id: int, user_id: int) -> ActionResul
     await _audit(
         actor_id, "reset_player", target_chat=chat_id, target_user=user_id,
     )
-    return ActionResult(True, "Игрок сброшен (0 см, без болезни).")
+    return ActionResult(True, texts.RES_PLAYER_RESET)
 
 
 async def delete_player(actor_id: int, chat_id: int, user_id: int) -> ActionResult:
@@ -149,34 +150,38 @@ async def delete_player(actor_id: int, chat_id: int, user_id: int) -> ActionResu
         actor_id, "delete_player", target_chat=chat_id, target_user=user_id,
     )
     if not deleted:
-        return ActionResult(False, "Игрок не найден.")
-    return ActionResult(True, "Игрок удалён из чата.")
+        return ActionResult(False, texts.RES_PLAYER_NOT_FOUND)
+    return ActionResult(True, texts.RES_PLAYER_DELETED)
 
 
 async def reset_chat(actor_id: int, chat_id: int) -> ActionResult:
     async with get_chat_lock(chat_id):
         n = await players_repo.reset_chat_players(chat_id)
     await _audit(actor_id, "reset_chat", target_chat=chat_id, payload={"removed": n})
-    return ActionResult(True, f"Чат сброшен, удалено игроков: {n}.")
+    return ActionResult(True, texts.res_chat_reset(n))
 
 
 async def ban_user(
-    actor_id: int, user_id: int, reason: str | None = None
+    actor_id: int,
+    user_id: int,
+    reason: str | None = None,
+    ban_until: int | None = None,
 ) -> ActionResult:
     if is_global_admin(user_id):
-        return ActionResult(False, "Нельзя забанить глобального администратора.")
-    await chats_repo.set_user_banned(user_id, True, reason=reason)
+        return ActionResult(False, texts.RES_CANT_BAN_ADMIN)
+    await chats_repo.set_user_banned(user_id, True, reason=reason, ban_until=ban_until)
     await _audit(
-        actor_id, "ban_user", target_user=user_id, payload={"reason": reason}
+        actor_id, "ban_user", target_user=user_id,
+        payload={"reason": reason, "ban_until": ban_until},
     )
-    suffix = f" Причина: {reason}." if reason else ""
-    return ActionResult(True, f"Пользователь {user_id} забанен.{suffix}")
+    suffix = texts.ban_reason_suffix(reason)
+    return ActionResult(True, texts.res_user_banned(user_id, suffix))
 
 
 async def unban_user(actor_id: int, user_id: int) -> ActionResult:
     await chats_repo.set_user_banned(user_id, False)
     await _audit(actor_id, "unban_user", target_user=user_id)
-    return ActionResult(True, f"Пользователь {user_id} разбанен.")
+    return ActionResult(True, texts.res_user_unbanned(user_id))
 
 
 async def ban_chat(
@@ -186,13 +191,13 @@ async def ban_chat(
     await _audit(
         actor_id, "ban_chat", target_chat=chat_id, payload={"reason": reason}
     )
-    return ActionResult(ok, f"Чат {chat_id} забанен." if ok else "Чат не найден.")
+    return ActionResult(ok, texts.res_chat_banned(chat_id) if ok else texts.RES_CHAT_NOT_FOUND)
 
 
 async def unban_chat(actor_id: int, chat_id: int) -> ActionResult:
     ok = await chats_repo.set_chat_banned(chat_id, False)
     await _audit(actor_id, "unban_chat", target_chat=chat_id)
-    return ActionResult(ok, f"Чат {chat_id} разбанен." if ok else "Чат не найден.")
+    return ActionResult(ok, texts.res_chat_unbanned(chat_id) if ok else texts.RES_CHAT_NOT_FOUND)
 
 
 async def broadcast_targets() -> list[int]:

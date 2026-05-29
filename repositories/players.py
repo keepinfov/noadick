@@ -187,6 +187,36 @@ async def chat_player_stats(chat_id: int) -> dict:
         return {"players": count, "total_size": total, "biggest": biggest}
 
 
+async def user_chat_sizes(user_id: int) -> list[tuple[int, str, int]]:
+    """All (chat_id, title, size) entries for a user across non-banned chats,
+    biggest first."""
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(Player.chat_id, Chat.title, Player.size)
+                .join(Chat, Chat.chat_id == Player.chat_id)
+                .where(Player.user_id == user_id, Chat.is_banned.is_(False))
+                .order_by(Player.size.desc())
+            )
+        ).all()
+        return [(cid, title, size) for cid, title, size in rows]
+
+
+async def global_rank_for(user_id: int, chat_id: int, size: int) -> int:
+    """Rank within a chat without loading every player: 1 + how many players
+    in that chat are strictly bigger."""
+    factory = get_session_factory()
+    async with factory() as session:
+        bigger = (
+            await session.execute(
+                select(func.count(Player.user_id))
+                .where(Player.chat_id == chat_id, Player.size > size)
+            )
+        ).scalar_one()
+        return bigger + 1
+
+
 async def cure_expired(chat_id: int, user_id: int) -> None:
     """Persist disease expiry computed elsewhere (clears disease columns)."""
     await set_player_fields(

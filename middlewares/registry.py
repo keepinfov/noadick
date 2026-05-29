@@ -2,6 +2,7 @@
 and enforce bans. Runs on every message and callback query."""
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -15,6 +16,7 @@ from aiogram.types import (
     User,
 )
 
+import texts
 from repositories import chats as chats_repo
 from repositories import threads as threads_repo
 from services.admins import is_global_admin
@@ -53,7 +55,11 @@ class RegistryMiddleware(BaseMiddleware):
                 user.id, user.first_name or "", user.username
             )
             if db_user.is_banned and not is_global_admin(user.id):
-                return None
+                # Lazily lift an expired timed ban on first action after expiry.
+                if db_user.ban_until is not None and db_user.ban_until < time.time():
+                    await chats_repo.set_user_banned(user.id, False)
+                else:
+                    return None
 
         if chat is not None:
             db_chat = await chats_repo.upsert_chat(
@@ -87,17 +93,11 @@ class RegistryMiddleware(BaseMiddleware):
                 link = await self._bot_link(bot)
                 kb = InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text="✍️ Написать боту", url=link)]
+                        [InlineKeyboardButton(text=texts.DM_GATE_BUTTON, url=link)]
                     ]
                 )
                 try:
-                    await event.reply(
-                        "👋 Чтобы пользоваться ботом, сначала напишите ему в личку "
-                        "(кнопка ниже, затем /start). Это нужно, чтобы бот мог "
-                        "уведомлять вас о блокировках рассылок и обращениях в "
-                        "поддержку.",
-                        reply_markup=kb,
-                    )
+                    await event.reply(texts.DM_GATE, reply_markup=kb)
                 except Exception:
                     pass
                 return None

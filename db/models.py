@@ -47,6 +47,8 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String, nullable=True)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    banned_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ban_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 

@@ -6,6 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+import texts
 from models.disease import (
     apply_growth_mod,
     check_expire,
@@ -77,11 +78,7 @@ async def cmd_dick(message: Message) -> None:
                 rank = _rank(storage, user_id)
                 remaining = _time_until_midnight(now)
                 dtag = disease_tag(owner)
-                text = (
-                    f"{mention}, твой писюн равен {owner['size']} см.\n"
-                    f"Ты занимаешь {rank} место в топе.\n"
-                    f"Попробуй через {remaining}"
-                )
+                text = texts.dick_already_today(mention, owner["size"], rank, remaining)
                 if dtag:
                     text += f"\n{dtag}"
                 if changed:
@@ -113,17 +110,12 @@ async def cmd_dick(message: Message) -> None:
         remaining = _time_until_midnight(now)
 
         if delta >= 0:
-            change_text = f"вырос на {delta} см"
+            change_text = texts.dick_grew(delta)
         else:
-            change_text = f"уменьшился на {abs(delta)} см"
+            change_text = texts.dick_shrank(delta)
 
         dtag = disease_tag(player)
-        text = (
-            f"{mention}, твой писюн {change_text}.\n"
-            f"Теперь он равен {player['size']} см.\n"
-            f"Ты занимаешь {rank} место в топе.\n"
-            f"Следующая попытка завтра, через {remaining}!"
-        )
+        text = texts.dick_result(mention, change_text, player["size"], rank, remaining)
         if dtag and not infection:
             text += f"\n{dtag}"
         text += disease_msg

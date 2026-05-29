@@ -4,6 +4,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+import texts
 from repositories import threads as threads_repo
 
 router = Router()
@@ -23,16 +24,13 @@ async def cmd_setbcast(message: Message, bot: Bot) -> None:
     if user is None:
         return
     if not await _is_chat_admin(bot, message.chat.id, user.id):
-        await message.answer("Только администратор чата может задать тему рассылки.")
+        await message.answer(texts.BCAST_NOT_ADMIN)
         return
     if not message.is_topic_message or message.message_thread_id is None:
-        await message.answer(
-            "Запусти эту команду внутри нужной темы форума — "
-            "именно туда будут приходить рассылки."
-        )
+        await message.answer(texts.BCAST_NEED_TOPIC)
         return
     await threads_repo.set_default_thread(message.chat.id, message.message_thread_id)
-    await message.answer("✅ Эта тема выбрана для рассылок.")
+    await message.answer(texts.BCAST_SET)
 
 
 @router.message(Command("unsetbcast"), F.chat.type.in_({"group", "supergroup"}))
@@ -41,11 +39,9 @@ async def cmd_unsetbcast(message: Message, bot: Bot) -> None:
     if user is None:
         return
     if not await _is_chat_admin(bot, message.chat.id, user.id):
-        await message.answer("Только администратор чата может изменить тему рассылки.")
+        await message.answer(texts.BCAST_NOT_ADMIN)
         return
     if await threads_repo.clear_default_thread(message.chat.id):
-        await message.answer(
-            "Тема рассылки сброшена. Теперь будет использоваться самая активная тема."
-        )
+        await message.answer(texts.BCAST_CLEARED)
     else:
-        await message.answer("Тема рассылки и так не была задана.")
+        await message.answer(texts.BCAST_NOT_SET)

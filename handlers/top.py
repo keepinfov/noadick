@@ -2,6 +2,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+import texts
 from models.disease import check_expire, disease_tag
 from repositories.players import get_chat_lock, get_storage, save_storage
 
@@ -23,17 +24,15 @@ async def cmd_top(message: Message) -> None:
             await save_storage(chat_id, storage)
 
     if not storage:
-        await message.answer(
-            "😥 Пока нет игроков\nПрисоединяйтесь введя /dick",
-        )
+        await message.answer(texts.TOP_EMPTY)
         return
 
     players = sorted(storage.items(), key=lambda x: x[1]["size"], reverse=True)
     top10 = players[:10]
 
-    lines = ["🏆 Топ 10:\n"]
+    lines = [texts.TOP_HEADER]
     for i, (_uid, player) in enumerate(top10):
         tag = disease_tag(player)
-        lines.append(f"{i + 1}. <b>{player['name']}{tag}</b> ({player['size']} см)")
+        lines.append(texts.top_line(i + 1, player["name"], tag, player["size"]))
 
     await message.answer("\n".join(lines), parse_mode="HTML")

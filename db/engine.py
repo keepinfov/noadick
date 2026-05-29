@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -11,6 +12,15 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from db.models import Base
+
+# Columns added after the initial schema. create_all() does not ALTER existing
+# tables, so these are added idempotently on startup for older databases.
+_MIGRATIONS: dict[str, dict[str, str]] = {
+    "users": {
+        "banned_at": "INTEGER",
+        "ban_until": "INTEGER",
+    },
+}
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -43,3 +53,11 @@ async def init_db() -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for table, columns in _MIGRATIONS.items():
+            rows = await conn.execute(text(f"PRAGMA table_info({table})"))
+            existing = {row[1] for row in rows}
+            for col, col_type in columns.items():
+                if col not in existing:
+                    await conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                    )

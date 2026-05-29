@@ -16,6 +16,14 @@ from models.disease import (
 from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
+import texts
+from texts import (
+    CORP_LINES,
+    REACTION_TIERS,
+    STEAL_LINES,
+    TECHNIQUE_LINES,
+    VICTORY_LINES,
+)
 
 router = Router()
 
@@ -23,73 +31,6 @@ DUEL_TIMEOUT = 60
 DEFAULT_STAKE = 5
 
 _duels: dict[str, dict] = {}
-
-VICTORY_LINES = [
-    "ОПА {winner} ПОБЕЖДАЕТ {loser} в жестокой схватке на письках!",
-    "БАХ! {winner} УНИЧТОЖАЕТ {loser} в пиписечной дуэли!",
-    "ВНЕЗАПНО {winner} РАЗНОСИТ {loser} в пух и прах!",
-    "ТРАХ-БАБАХ! {winner} НЕ ОСТАВЛЯЕТ ШАНСОВ {loser}!",
-    "ФАТАЛИТИ! {winner} ДОБИВАЕТ {loser} в неравном бою!",
-    "ХЛОБЫСЬ! {winner} РАСКАТЫВАЕТ {loser} как блинчик!",
-    "ШМЯК! {winner} ВТАПТЫВАЕТ {loser} в грязь лицом!",
-    "ХРЯСЬ! {winner} ВЫНОСИТ {loser} одной левой!",
-    "ПШШШ... {winner} МЕТОДИЧНО УНИЧТОЖАЕТ {loser}!",
-    "БДЫЩЬ! {winner} НАНОСИТ СОКРУШИТЕЛЬНЫЙ УРОН {loser}!",
-    "ПИУ-ПИУ! {winner} РАССТРЕЛИВАЕТ {loser} в упор!",
-    "ХАДУКЕН! {winner} ПРОБИВАЕТ ЗАЩИТУ {loser}!",
-    "КРИТ! {winner} НАНОСИТ КРИТИЧЕСКИЙ УДАР {loser}!",
-    "RAMPAGE! {winner} НЕ ОСТАНОВИТЬ... {loser} ПОВЕРЖЕН!",
-    "GODLIKE! {winner} ВОЗНОСИТСЯ НАД {loser}!",
-]
-
-TECHNIQUE_LINES = [
-    "Применил СКОРОСТРЕЛ — удар был слишком быстр для {loser_name}.",
-    "Использовал ТЯЖЕЛУЮ АРТИЛЛЕРИЮ — {loser_name} не выдержал напора.",
-    "Сработала тактика ВНЕЗАПНОГО ПРОНИКНОВЕНИЯ — {loser_name} не успел сгруппироваться.",
-    "Провёл КОНТР-АРГУМЕНТ — {loser_name} опешил от такого поворота.",
-    "Применил ПРИЁМ ТРЁХСОТ СПАРТАНЦЕВ — {loser_name} отброшен назад.",
-    "Включил режим БЕРСЕРКА — {loser_name} в нокауте.",
-    "Исполнил КОМБО x3 — {loser_name} разорван в клочья.",
-    "Сделал ОБХОДНОЙ МАНЁВР — {loser_name} атакован с фланга.",
-    "Нажал КНОПКУ УЛЬТЫ — {loser_name} аннигилирован.",
-    "Применил ДИПЛОМАТИЮ — не помогла, пришлось бить. {loser_name} проиграл.",
-    "Устроил АРТ-ОБСТРЕЛ — накрыло {loser_name} по полной.",
-    "Поймал ВТОРОЕ ДЫХАНИЕ — {loser_name} такого не ожидал.",
-    "Активировал ЧИТ-КОДЫ — {loser_name} уже пишет жалобу администрации.",
-    "Ушёл в СТЕЛС — {loser_name} даже не понял, откуда прилетело.",
-    "Врубил ТУРБО-РЕЖИМ — {loser_name} снесён ударной волной.",
-]
-
-STEAL_LINES = [
-    "ОТОБРАЛ {stolen} см у {loser}",
-    "ОТЖАЛ {stolen} см у {loser}",
-    "ЭКСПРОПРИИРОВАЛ {stolen} см у {loser}",
-    "КОНФИСКОВАЛ {stolen} см у {loser}",
-    "СПИЗДИЛ {stolen} см у {loser}",
-    "ОТЖАРИЛ {stolen} см у {loser} без права на возврат",
-    "ВЫРВАЛ {stolen} см у {loser} с мясом",
-    "СКРУТИЛ {stolen} см у {loser} в баранку",
-    "ОТКУСИЛ {stolen} см у {loser} как сникерс",
-]
-
-CORP_LINES = [
-    "Корпорация Ненавязчиво Забирает Свои {tax} см (это бизнес, ничего личного).",
-    "Ну и мы, как честная корпорация, скромно взяли комиссию: {tax} см.",
-    "Агенты корпорации уже списали {tax} см комиссии. Спасибо за сотрудничество.",
-    "Комиссия корпорации: {tax} см. Без обид, это просто бизнес.",
-    "Налог на воздух, НДС на письку, пенсионный сбор... короче {tax} см наших.",
-    "Отдел комплаенс списал {tax} см. Таковы правила корпоративной этики.",
-    "Юридический отдел требует {tax} см за оформление протокола дуэли.",
-    "Бухгалтерия уже перевела {tax} см на офшорный счет. Все чисто.",
-]
-
-REACTION_TIERS = [
-    (0, 3, -0.15, "МГНОВЕННАЯ реакция! {loser} почти увернулся... но не совсем."),
-    (3, 8, -0.07, "Быстрая реакция, {loser} пытался уклониться."),
-    (8, 20, 0.00, "Обычная реакция. Ни fast, ни slow."),
-    (20, 40, 0.05, "Слегка замешкался... {loser} явно отвлекся на котиков."),
-    (40, 999, 0.12, "ОЧЕНЬ долго думал... {loser} залип в телефоне и поплатился."),
-]
 
 
 def _mention(user_id: int, name: str) -> str:
@@ -111,7 +52,7 @@ async def _expire_duel(bot: Bot, chat_id: int, message_id: int, token: str) -> N
     _duels.pop(token, None)
     try:
         await bot.edit_message_text(
-            "Вызов истёк. Никто так и не откликнулся.",
+            texts.DUEL_EXPIRED_NOBODY,
             chat_id=chat_id,
             message_id=message_id,
         )
@@ -148,7 +89,7 @@ def _resolve_fight(
     base_chance: float,
 ) -> tuple[bool, str, str, str, float]:
     reaction_mod = 0.0
-    reaction_comment = "Обычная реакция. Ничего особенного."
+    reaction_comment = texts.DUEL_DEFAULT_REACTION
 
     for lo, hi, mod, comment in REACTION_TIERS:
         if lo <= reaction_sec < hi:
@@ -198,17 +139,22 @@ def _build_result_message(
     disease_note: str,
     infection_msg: str,
 ) -> str:
-    result = (
-        f"{victory_line}\n"
-        f"{technique_line}\n\n"
-        f"{steal_line}\n\n"
-        f"Из них:\n"
-        f"-- победитель получил +{winner_profit} см (x1.5 от ставки)\n"
-        f"-- корпорация забрала {corp_tax} см\n\n"
-        f"Итог:\n"
-        f"{attacker_name} было {attacker_was} см, теперь {attacker_now} см{attacker_tag}\n"
-        f"{defender_name} было {defender_was} см, теперь {defender_now} см{defender_tag}\n\n"
-        f"Базовый шанс атакующего: {base_chance:.0%} | Итоговый: {final_chance:.0%}"
+    result = texts.duel_result(
+        victory_line,
+        technique_line,
+        steal_line,
+        winner_profit,
+        corp_tax,
+        attacker_name,
+        attacker_was,
+        attacker_now,
+        attacker_tag,
+        defender_name,
+        defender_was,
+        defender_now,
+        defender_tag,
+        base_chance,
+        final_chance,
     )
     if disease_note:
         result += f"\n{disease_note}"
@@ -229,12 +175,12 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     a_str = str(user.id)
     if a_str not in storage:
-        await message.answer(f"Сначала измерь письку командой /dick, {_mention(user.id, user.first_name)}!")
+        await message.answer(texts.duel_measure_first(_mention(user.id, user.first_name)))
         return
 
     attacker_size = storage[a_str]["size"]
     if attacker_size <= 0:
-        await message.answer("Твоя писька размером 0 см. Дуэль невозможна. Попробуй /dick.")
+        await message.answer(texts.duel_zero_size(_mention(user.id, user.first_name)))
         return
 
     args = command.args
@@ -252,40 +198,41 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         defender_name = None
         defender_id = 0
 
-        text = (
-            f"{_mention(user.id, user.first_name)} бросает ОТКРЫТЫЙ ВЫЗОВ!\n"
-            f"Первый смельчак, нажавший кнопку — тот и соперник.\n\n"
-            f"Ставка: {stake} см с каждого.\n"
-            f"{attacker_size} см vs ??? см (шансы: ? / ?)\n\n"
-            f"На раздумья {DUEL_TIMEOUT} секунд."
+        text = texts.duel_open_challenge(
+            _mention(user.id, user.first_name), stake, attacker_size, DUEL_TIMEOUT
         )
     else:
         defender_id = target.id
         defender_name = target.first_name
 
         if user.id == defender_id:
-            await message.answer("Нельзя вызвать на дуэль самого себя. Это было бы странно.")
+            await message.answer(texts.DUEL_SELF)
             return
 
         d_str = str(defender_id)
         if d_str not in storage:
-            await message.answer(f"Сначала измерь письку командой /dick, {_mention(defender_id, defender_name)}!")
+            await message.answer(
+                texts.duel_target_measure_first(_mention(defender_id, defender_name))
+            )
             return
 
         defender_size = storage[d_str]["size"]
         if defender_size <= 0:
-            await message.answer(f"У {_mention(defender_id, defender_name)} писька 0 см. Дуэль невозможна.")
+            await message.answer(texts.duel_target_zero(_mention(defender_id, defender_name)))
             return
 
         stake = min(stake, defender_size)
         base_chance = _calc_base_chance(attacker_size, defender_size)
 
-        text = (
-            f"{_mention(user.id, user.first_name)} вызывает {_mention(defender_id, defender_name)} на пиписечную дуэль!\n\n"
-            f"Ставка: {stake} см с каждого.\n"
-            f"{attacker_size} см vs {defender_size} см (шанс: {base_chance:.0%} / {1 - base_chance:.0%})\n\n"
-            f"У {defender_name} есть {DUEL_TIMEOUT} секунд чтобы принять вызов.\n"
-            f"Реакция повлияет на исход!"
+        text = texts.duel_directed_challenge(
+            _mention(user.id, user.first_name),
+            _mention(defender_id, defender_name),
+            defender_name,
+            stake,
+            attacker_size,
+            defender_size,
+            base_chance,
+            DUEL_TIMEOUT,
         )
 
     challenge_ts = time.time()
@@ -301,7 +248,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="-- ПРИНЯТЬ ВЫЗОВ --", callback_data=callback_data)]
+            [InlineKeyboardButton(text=texts.DUEL_ACCEPT_BUTTON, callback_data=callback_data)]
         ]
     )
 
@@ -316,26 +263,26 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
     data = _pop_duel(token)
 
     if data is None:
-        await _safe_edit(callback, "Вызов уже недействителен.")
+        await _safe_edit(callback, texts.DUEL_INVALID)
         await callback.answer()
         return
 
     is_open = data["defender_id"] == 0
 
     if not is_open and callback.from_user.id != data["defender_id"]:
-        await callback.answer("Этот вызов не тебе!", show_alert=True)
+        await callback.answer(texts.DUEL_NOT_YOURS, show_alert=True)
         _duels[token] = data
         return
 
     if callback.from_user.id == data["attacker_id"]:
-        await callback.answer("Нельзя принять собственный вызов.", show_alert=True)
+        await callback.answer(texts.DUEL_OWN, show_alert=True)
         _duels[token] = data
         return
 
     now = time.time()
     elapsed = now - data["challenge_ts"]
     if elapsed > DUEL_TIMEOUT:
-        await _safe_edit(callback, "Вызов просрочен. Дуэль отменена.")
+        await _safe_edit(callback, texts.DUEL_TIMED_OUT)
         await callback.answer()
         return
 
@@ -349,13 +296,13 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             d_str = str(data["defender_id"])
 
             if d_str not in storage:
-                await callback.answer("Сначала измерь письку командой /dick!", show_alert=True)
+                await callback.answer(texts.DUEL_ACCEPT_MEASURE_FIRST, show_alert=True)
                 _duels[token] = data
                 return
 
             defender_size = storage[d_str]["size"]
             if defender_size <= 0:
-                await callback.answer("Твоя писька 0 см. Дуэль невозможна.", show_alert=True)
+                await callback.answer(texts.DUEL_ACCEPT_ZERO, show_alert=True)
                 _duels[token] = data
                 return
 
@@ -382,7 +329,7 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             from models.disease import DISEASE_BY_ID
             d = DISEASE_BY_ID.get(dtag)
             if d:
-                disease_note_parts.append(f"{defender['name']}: {d.name} даёт {d.duel_mod:+.0%} к шансу атакующего")
+                disease_note_parts.append(texts.duel_disease_note(d.name, d.duel_mod, defender['name']))
         base_chance = adjusted
 
         winner_is_attacker, victory_line, technique_line, reaction_comment, final_chance = _resolve_fight(
