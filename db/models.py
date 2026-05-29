@@ -113,3 +113,17 @@ class LegacyChat(Base):
     data: Mapped[dict] = mapped_column(JSON)
     relinked_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class ChatThreadStat(Base):
+    """Per-chat forum-topic tracking: usage count (auto fallback) +
+    explicit admin-pinned broadcast target (is_default)."""
+
+    __tablename__ = "chat_thread_stats"
+    __table_args__ = (Index("ix_cts_chat_default", "chat_id", "is_default"),)
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    thread_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)

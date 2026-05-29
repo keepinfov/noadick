@@ -15,6 +15,7 @@ from repositories import chats as chats_repo
 from repositories import events as E
 from repositories import players as players_repo
 from repositories.players import get_chat_lock, now_ts
+from services.admins import is_global_admin
 
 
 @dataclass
@@ -159,10 +160,17 @@ async def reset_chat(actor_id: int, chat_id: int) -> ActionResult:
     return ActionResult(True, f"Чат сброшен, удалено игроков: {n}.")
 
 
-async def ban_user(actor_id: int, user_id: int) -> ActionResult:
-    await chats_repo.set_user_banned(user_id, True)
-    await _audit(actor_id, "ban_user", target_user=user_id)
-    return ActionResult(True, f"Пользователь {user_id} забанен.")
+async def ban_user(
+    actor_id: int, user_id: int, reason: str | None = None
+) -> ActionResult:
+    if is_global_admin(user_id):
+        return ActionResult(False, "Нельзя забанить глобального администратора.")
+    await chats_repo.set_user_banned(user_id, True, reason=reason)
+    await _audit(
+        actor_id, "ban_user", target_user=user_id, payload={"reason": reason}
+    )
+    suffix = f" Причина: {reason}." if reason else ""
+    return ActionResult(True, f"Пользователь {user_id} забанен.{suffix}")
 
 
 async def unban_user(actor_id: int, user_id: int) -> ActionResult:
@@ -171,9 +179,13 @@ async def unban_user(actor_id: int, user_id: int) -> ActionResult:
     return ActionResult(True, f"Пользователь {user_id} разбанен.")
 
 
-async def ban_chat(actor_id: int, chat_id: int) -> ActionResult:
+async def ban_chat(
+    actor_id: int, chat_id: int, reason: str | None = None
+) -> ActionResult:
     ok = await chats_repo.set_chat_banned(chat_id, True)
-    await _audit(actor_id, "ban_chat", target_chat=chat_id)
+    await _audit(
+        actor_id, "ban_chat", target_chat=chat_id, payload={"reason": reason}
+    )
     return ActionResult(ok, f"Чат {chat_id} забанен." if ok else "Чат не найден.")
 
 

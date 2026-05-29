@@ -90,15 +90,23 @@ async def get_user(user_id: int) -> User | None:
         return await session.get(User, user_id)
 
 
-async def set_user_banned(user_id: int, banned: bool) -> bool:
+async def set_user_banned(
+    user_id: int, banned: bool, reason: str | None = None
+) -> bool:
     factory = get_session_factory()
     async with factory() as session:
         user = await session.get(User, user_id)
         if user is None:
-            user = User(user_id=user_id, first_name=str(user_id), is_banned=banned)
+            user = User(
+                user_id=user_id,
+                first_name=str(user_id),
+                is_banned=banned,
+                notes=reason if banned else None,
+            )
             session.add(user)
         else:
             user.is_banned = banned
+            user.notes = reason if banned else None
         await session.commit()
         return True
 
