@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      TZ: "Europe/Moscow"
+      PYTHONUNBUFFERED: "1"
+      BOT_TOKEN: "${BOT_TOKEN}"
+      ADMIN_IDS: "${ADMIN_IDS:-}"
+      PROXY: "${PROXY:-}"
+      DB_PATH: "/app/data/bot.db"
+      STORAGE_PATH: "/app/storage"
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage

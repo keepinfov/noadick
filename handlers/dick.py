@@ -1,0 +1,130 @@
+import os
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from models.disease import (
+    apply_growth_mod,
+    check_expire,
+    disease_tag,
+    roll_infection,
+)
+from repositories.players import (
+    PlayerDict,
+    Storage,
+    get_chat_lock,
+    get_storage,
+    save_storage,
+)
+from services.game import roll_delta
+
+router = Router()
+
+
+def _get_tz() -> ZoneInfo:
+    return ZoneInfo(key=os.environ.get("TZ", "Europe/Moscow"))
+
+
+def _rank(storage: Storage, user_id: int) -> int:
+    players = sorted(storage.items(), key=lambda x: x[1]["size"], reverse=True)
+    for i, (uid, _) in enumerate(players):
+        if int(uid) == user_id:
+            return i + 1
+    return len(players) + 1
+
+
+def _time_until_midnight(now: datetime) -> str:
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    delta = tomorrow - now
+    hours = delta.seconds // 3600
+    minutes = (delta.seconds % 3600) // 60
+    return f"{hours} ч {minutes} мин"
+
+
+def _mention(user_id: int, name: str) -> str:
+    return f"<a href=\"tg://user?id={user_id}\">{name}</a>"
+
+
+@router.message(Command("dick"))
+async def cmd_dick(message: Message) -> None:
+    user = message.from_user
+    if not user:
+        return
+
+    user_id = user.id
+    chat_id = message.chat.id
+    tz = _get_tz()
+    now = datetime.now(tz)
+    uid_str = str(user_id)
+
+    async with get_chat_lock(chat_id):
+        storage = await get_storage(chat_id)
+
+        changed = False
+        for pid in list(storage.keys()):
+            if check_expire(storage[pid]):
+                changed = True
+
+        if uid_str in storage:
+            owner = storage[uid_str]
+            last_dt = datetime.fromtimestamp(owner["last"], tz=tz)
+            if last_dt.date() == now.date():
+                mention = _mention(user_id, user.first_name)
+                rank = _rank(storage, user_id)
+                remaining = _time_until_midnight(now)
+                dtag = disease_tag(owner)
+                text = (
+                    f"{mention}, твой писюн равен {owner['size']} см.\n"
+                    f"Ты занимаешь {rank} место в топе.\n"
+                    f"Попробуй через {remaining}"
+                )
+                if dtag:
+                    text += f"\n{dtag}"
+                if changed:
+                    await save_storage(chat_id, storage)
+                await message.answer(text, parse_mode="HTML")
+                return
+
+        delta = roll_delta()
+
+        player: PlayerDict = storage.get(uid_str, {"name": user.first_name, "size": 0, "last": 0})
+
+        delta = apply_growth_mod(player, delta)
+        player["size"] += delta
+        if player["size"] < 0:
+            player["size"] = 0
+        player["last"] = int(now.timestamp())
+        player["name"] = user.first_name
+        storage[uid_str] = player
+
+        infection = roll_infection()
+        disease_msg = ""
+        if infection:
+            player["disease"] = {"id": infection.id, "caught_at": int(now.timestamp())}
+            disease_msg = f"\n\n{infection.catch_message}"
+
+        mention = _mention(user_id, user.first_name)
+        rank = _rank(storage, user_id)
+        remaining = _time_until_midnight(now)
+
+        if delta >= 0:
+            change_text = f"вырос на {delta} см"
+        else:
+            change_text = f"уменьшился на {abs(delta)} см"
+
+        dtag = disease_tag(player)
+        text = (
+            f"{mention}, твой писюн {change_text}.\n"
+            f"Теперь он равен {player['size']} см.\n"
+            f"Ты занимаешь {rank} место в топе.\n"
+            f"Следующая попытка завтра, через {remaining}!"
+        )
+        if dtag and not infection:
+            text += f"\n{dtag}"
+        text += disease_msg
+
+        await save_storage(chat_id, storage)
+        await message.answer(text, parse_mode="HTML")

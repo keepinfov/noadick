@@ -1,0 +1,5 @@
+aiogram>=3.17,<4
+python-dotenv>=1.0
+aiohttp-socks>=0.9
+SQLAlchemy[asyncio]>=2.0
+aiosqlite>=0.20
