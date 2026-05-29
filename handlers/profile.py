@@ -4,6 +4,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
 from services import stats as S
 
@@ -17,8 +18,7 @@ def _mention(user_id: int, name: str) -> str:
 @router.message(Command("me"))
 async def cmd_me(message: Message) -> None:
     chat_id = message.chat.id
-    reply = message.reply_to_message
-    target = reply.from_user if reply and reply.from_user else message.from_user
+    target = reply_target(message) or message.from_user
     if not target:
         return
 

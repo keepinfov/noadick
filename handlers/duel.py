@@ -13,6 +13,7 @@ from models.disease import (
     disease_tag,
     try_infect,
 )
+from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
 
@@ -244,8 +245,8 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     stake = max(1, min(stake, attacker_size))
 
-    reply = message.reply_to_message
-    is_open = not reply or not reply.from_user
+    target = reply_target(message)
+    is_open = target is None
 
     if is_open:
         defender_name = None
@@ -259,8 +260,8 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
             f"На раздумья {DUEL_TIMEOUT} секунд."
         )
     else:
-        defender_id = reply.from_user.id
-        defender_name = reply.from_user.first_name
+        defender_id = target.id
+        defender_name = target.first_name
 
         if user.id == defender_id:
             await message.answer("Нельзя вызвать на дуэль самого себя. Это было бы странно.")
