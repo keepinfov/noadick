@@ -13,6 +13,7 @@ from models.disease import (
     disease_tag,
     try_infect,
 )
+from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
 
 router = Router()
@@ -433,6 +434,43 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         )
 
         await save_storage(chat_id, storage)
+
+        ts = int(now)
+        if winner_is_attacker:
+            winner_id, loser_id = data["attacker_id"], data["defender_id"]
+            winner_before, loser_before = attacker_size, defender_size
+        else:
+            winner_id, loser_id = data["defender_id"], data["attacker_id"]
+            winner_before, loser_before = defender_size, attacker_size
+        winner_after = storage[winner_key]["size"]
+        loser_after = storage[loser_key]["size"]
+
+        await E.ensure_baseline(chat_id, winner_id, winner_before, created_at=ts)
+        await E.ensure_baseline(chat_id, loser_id, loser_before, created_at=ts)
+        await E.log_event(
+            chat_id, winner_id, E.DUEL,
+            delta=winner_after - winner_before,
+            size_after=winner_after,
+            meta={
+                "won": True, "opponent_id": loser_id, "stake": stake,
+                "profit": winner_profit, "tax": corp_tax,
+            },
+            created_at=ts,
+        )
+        await E.log_event(
+            chat_id, loser_id, E.DUEL,
+            delta=loser_after - loser_before,
+            size_after=loser_after,
+            meta={"won": False, "opponent_id": winner_id, "stake": stake},
+            created_at=ts,
+        )
+        if infection_msg:
+            await E.log_event(
+                chat_id, loser_id, E.INFECTION,
+                size_after=loser_after,
+                meta={"disease_id": loser.get("disease", {}).get("id")},
+                created_at=ts,
+            )
 
     await _safe_edit(callback, result, parse_mode="HTML")
     await callback.answer()

@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from db.engine import get_session_factory
 from db.models import LegacyChat, Player
+from repositories import events as E
 from repositories.players import _apply_dict_to_player
 
 # Chats whose legacy relink has already been attempted this process; avoids a
@@ -48,6 +49,7 @@ async def relink_legacy(chat_id: int) -> int:
         )
 
         imported = 0
+        baselines: list[tuple[int, int, int]] = []
         for uid_str, data in (legacy.data or {}).items():
             uid = int(uid_str)
             if uid in existing_ids:
@@ -56,7 +58,18 @@ async def relink_legacy(chat_id: int) -> int:
             _apply_dict_to_player(p, data)
             session.add(p)
             imported += 1
+            if p.size:
+                baselines.append((uid, p.size, p.last_play))
 
         legacy.relinked_chat_id = chat_id
         await session.commit()
-        return imported
+
+    # Seed a baseline timeline point for each imported player so /me has a
+    # starting size right away. Written outside the import session.
+    for uid, size, last_play in baselines:
+        await E.log_event(
+            chat_id, uid, E.BASELINE,
+            size_after=size,
+            created_at=last_play or None,
+        )
+    return imported

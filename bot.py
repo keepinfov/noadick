@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from dotenv import load_dotenv
 
 from db.engine import init_db
-from handlers import admin, dick, duel, help, ping, top
+from handlers import admin, dick, duel, help, ping, profile, top
 from middlewares.registry import RegistryMiddleware
 
 
@@ -43,7 +43,8 @@ async def main() -> None:
     dp.callback_query.outer_middleware(RegistryMiddleware())
 
     dp.include_routers(
-        admin.router, dick.router, duel.router, top.router, help.router, ping.router
+        admin.router, dick.router, duel.router, profile.router,
+        top.router, help.router, ping.router,
     )
 
     await dp.start_polling(bot)

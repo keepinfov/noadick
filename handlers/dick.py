@@ -12,6 +12,7 @@ from models.disease import (
     disease_tag,
     roll_infection,
 )
+from repositories import events as E
 from repositories.players import (
     PlayerDict,
     Storage,
@@ -88,11 +89,12 @@ async def cmd_dick(message: Message) -> None:
                 await message.answer(text, parse_mode="HTML")
                 return
 
-        delta = roll_delta()
+        rolled = roll_delta()
 
         player: PlayerDict = storage.get(uid_str, {"name": user.first_name, "size": 0, "last": 0})
 
-        delta = apply_growth_mod(player, delta)
+        before = player["size"]
+        delta = apply_growth_mod(player, rolled)
         player["size"] += delta
         if player["size"] < 0:
             player["size"] = 0
@@ -127,4 +129,22 @@ async def cmd_dick(message: Message) -> None:
         text += disease_msg
 
         await save_storage(chat_id, storage)
+
+        ts = int(now.timestamp())
+        await E.ensure_baseline(chat_id, user_id, before, created_at=ts)
+        await E.log_event(
+            chat_id, user_id, E.DICK,
+            delta=player["size"] - before,
+            size_after=player["size"],
+            meta={"rolled": rolled},
+            created_at=ts,
+        )
+        if infection:
+            await E.log_event(
+                chat_id, user_id, E.INFECTION,
+                size_after=player["size"],
+                meta={"disease_id": infection.id},
+                created_at=ts,
+            )
+
         await message.answer(text, parse_mode="HTML")

@@ -12,6 +12,7 @@ from db.engine import get_session_factory
 from db.models import AuditLog
 from models.disease import DISEASE_BY_ID
 from repositories import chats as chats_repo
+from repositories import events as E
 from repositories import players as players_repo
 from repositories.players import get_chat_lock, now_ts
 
@@ -49,7 +50,13 @@ async def set_size(
 ) -> ActionResult:
     size = max(0, int(size))
     async with get_chat_lock(chat_id):
+        current = await players_repo.get_player(chat_id, user_id)
+        before = current.size if current else 0
         p = await players_repo.set_player_fields(chat_id, user_id, size=size)
+    await E.ensure_baseline(chat_id, user_id, before)
+    await E.log_event(
+        chat_id, user_id, E.ADMIN_ADJUST, delta=size - before, size_after=size
+    )
     await _audit(
         actor_id, "set_size", target_chat=chat_id, target_user=user_id,
         payload={"size": size},
@@ -65,6 +72,11 @@ async def add_size(
         base = current.size if current else 0
         new_size = max(0, base + int(delta))
         p = await players_repo.set_player_fields(chat_id, user_id, size=new_size)
+    await E.ensure_baseline(chat_id, user_id, base)
+    await E.log_event(
+        chat_id, user_id, E.ADMIN_ADJUST,
+        delta=new_size - base, size_after=new_size,
+    )
     await _audit(
         actor_id, "add_size", target_chat=chat_id, target_user=user_id,
         payload={"delta": delta, "size": new_size},
@@ -113,10 +125,16 @@ async def cure(actor_id: int, chat_id: int, user_id: int) -> ActionResult:
 
 async def reset_player(actor_id: int, chat_id: int, user_id: int) -> ActionResult:
     async with get_chat_lock(chat_id):
+        current = await players_repo.get_player(chat_id, user_id)
+        before = current.size if current else 0
         await players_repo.set_player_fields(
             chat_id, user_id, size=0, last_play=0,
             disease_id=None, disease_caught_at=None,
         )
+    await E.ensure_baseline(chat_id, user_id, before)
+    await E.log_event(
+        chat_id, user_id, E.ADMIN_ADJUST, delta=-before, size_after=0
+    )
     await _audit(
         actor_id, "reset_player", target_chat=chat_id, target_user=user_id,
     )

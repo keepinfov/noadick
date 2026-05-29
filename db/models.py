@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import JSON, BigInteger, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -71,6 +80,23 @@ class AuditLog(Base):
     target_chat: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     target_user: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class Event(Base):
+    """Append-only log of size-affecting game events, used for /me stats and
+    (later) chart generation."""
+
+    __tablename__ = "events"
+    __table_args__ = (Index("ix_events_chat_user_ts", "chat_id", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    type: Mapped[str] = mapped_column(String)
+    delta: Mapped[int] = mapped_column(Integer, default=0)
+    size_after: Mapped[int] = mapped_column(Integer, default=0)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
 
 
