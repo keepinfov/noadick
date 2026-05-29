@@ -6,9 +6,11 @@ the ADMIN_IDS environment variable (comma-separated).
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -325,7 +327,10 @@ async def cb_chat(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("adm:p:"))
-async def cb_player(callback: CallbackQuery) -> None:
+async def cb_player(callback: CallbackQuery, state: FSMContext) -> None:
+    # Reaching a player view means leaving any input flow (e.g. cancelling the
+    # ban reason/duration picker), so drop any half-finished FSM state.
+    await state.clear()
     _, _, chat_id, user_id = callback.data.split(":")
     text, kb = await render_player(int(chat_id), int(user_id))
     await _edit(callback, text, kb)
@@ -517,7 +522,7 @@ async def cb_ban_chat_custom(callback: CallbackQuery, state: FSMContext) -> None
 @router.message(AdminStates.ban_reason)
 async def msg_ban_reason(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
-    reason = (message.text or "").strip()
+    reason = (message.text or "").strip()[: texts.MAX_BAN_REASON_LEN]
     if not reason:
         await state.clear()
         await message.answer(texts.ADMIN_REASON_EMPTY, reply_markup=main_menu_kb())
@@ -612,7 +617,7 @@ async def cb_set_name(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_set_name(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.clear()
-    name = (message.text or "").strip()
+    name = (message.text or "").strip()[: texts.MAX_NAME_LEN]
     if not name:
         await message.answer(texts.ADMIN_NAME_EMPTY, reply_markup=main_menu_kb())
         return
@@ -630,7 +635,7 @@ async def cb_find(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(AdminStates.find_query)
 async def msg_find(message: Message, state: FSMContext) -> None:
     await state.clear()
-    query = (message.text or "").strip()
+    query = (message.text or "").strip()[: texts.MAX_QUERY_LEN]
     if not query:
         await message.answer(texts.ADMIN_FIND_EMPTY, reply_markup=main_menu_kb())
         return
@@ -676,6 +681,26 @@ async def msg_bcast(message: Message, state: FSMContext) -> None:
     )
 
 
+# Pause between broadcast sends to stay under Telegram's ~30 msg/s flood cap.
+BCAST_RATE_DELAY = 0.05
+
+
+async def _bcast_send(bot: Bot, chat_id: int, text: str, thread_id: int | None) -> bool:
+    """Send one broadcast message, honoring Telegram flood limits (RetryAfter).
+    Returns True on success, False on any other failure."""
+    for _ in range(2):
+        try:
+            await bot.send_message(
+                chat_id, text, parse_mode="HTML", message_thread_id=thread_id
+            )
+            return True
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+        except Exception:
+            return False
+    return False
+
+
 @router.callback_query(F.data == "adm:yes:bcast")
 async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
@@ -692,31 +717,14 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
     failed = 0
     for chat_id in targets:
         thread_id, reason = await threads_repo.resolve_thread(chat_id)
-        ok = False
-        try:
-            await bot.send_message(
-                chat_id, text, parse_mode="HTML", message_thread_id=thread_id
-            )
-            ok = True
-        except Exception:
-            if thread_id is not None:  # тема могла быть удалена — ретрай в General
-                try:
-                    await bot.send_message(chat_id, text, parse_mode="HTML")
-                    ok = True
-                except Exception:
-                    ok = False
+        ok = await _bcast_send(bot, chat_id, text, thread_id)
+        if not ok and thread_id is not None:  # тема могла быть удалена — ретрай в General
+            ok = await _bcast_send(bot, chat_id, text, None)
         sent += int(ok)
         failed += int(not ok)
         if ok and reason == "auto":
-            try:
-                await bot.send_message(
-                    chat_id,
-                    texts.ADMIN_BCAST_AUTO_TOPIC,
-                    parse_mode="HTML",
-                    message_thread_id=thread_id,
-                )
-            except Exception:
-                pass
+            await _bcast_send(bot, chat_id, texts.ADMIN_BCAST_AUTO_TOPIC, thread_id)
+        await asyncio.sleep(BCAST_RATE_DELAY)
     if callback.message is not None:
         await callback.message.answer(
             texts.admin_bcast_done(sent, failed),

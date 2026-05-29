@@ -1,4 +1,5 @@
 import asyncio
+import html
 import random
 import secrets
 import time
@@ -31,10 +32,12 @@ DUEL_TIMEOUT = 60
 DEFAULT_STAKE = 5
 
 _duels: dict[str, dict] = {}
+# Strong refs to expiry tasks so they aren't garbage-collected mid-flight.
+_expire_tasks: set[asyncio.Task] = set()
 
 
 def _mention(user_id: int, name: str) -> str:
-    return f"<a href=\"tg://user?id={user_id}\">{name}</a>"
+    return f"<a href=\"tg://user?id={user_id}\">{html.escape(name)}</a>"
 
 
 async def _safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
@@ -62,10 +65,6 @@ async def _expire_duel(bot: Bot, chat_id: int, message_id: int, token: str) -> N
 
 def _gen_token() -> str:
     return secrets.token_hex(4)
-
-
-def _pop_duel(token: str) -> dict | None:
-    return _duels.pop(token, None)
 
 
 SIZE_WEIGHT = 0.2
@@ -254,40 +253,51 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
     _duels[token]["message_id"] = sent.message_id
-    asyncio.create_task(_expire_duel(bot, chat_id, sent.message_id, token))
+    task = asyncio.create_task(_expire_duel(bot, chat_id, sent.message_id, token))
+    _expire_tasks.add(task)
+    task.add_done_callback(_expire_tasks.discard)
 
 
 @router.callback_query(F.data.startswith("duel:"))
 async def on_duel_accept(callback: CallbackQuery) -> None:
     token = callback.data.split("duel:")[1]
-    data = _pop_duel(token)
+    peek = _duels.get(token)
 
-    if data is None:
+    if peek is None:
         await _safe_edit(callback, texts.DUEL_INVALID)
         await callback.answer()
         return
 
-    is_open = data["defender_id"] == 0
-
-    if not is_open and callback.from_user.id != data["defender_id"]:
-        await callback.answer(texts.DUEL_NOT_YOURS, show_alert=True)
-        _duels[token] = data
-        return
-
-    if callback.from_user.id == data["attacker_id"]:
-        await callback.answer(texts.DUEL_OWN, show_alert=True)
-        _duels[token] = data
-        return
-
-    now = time.time()
-    elapsed = now - data["challenge_ts"]
-    if elapsed > DUEL_TIMEOUT:
-        await _safe_edit(callback, texts.DUEL_TIMED_OUT)
-        await callback.answer()
-        return
-
-    chat_id = data["chat_id"]
+    # Acquire the per-chat lock BEFORE inspecting/mutating the duel so two
+    # concurrent "accept" clicks cannot both pass the checks (no TOCTOU). The
+    # token is only removed once the fight actually commits; rejections leave
+    # the duel active for a valid retry (no pop/re-insert dance).
+    chat_id = peek["chat_id"]
     async with get_chat_lock(chat_id):
+        data = _duels.get(token)
+        if data is None:
+            await _safe_edit(callback, texts.DUEL_INVALID)
+            await callback.answer()
+            return
+
+        is_open = data["defender_id"] == 0
+
+        if not is_open and callback.from_user.id != data["defender_id"]:
+            await callback.answer(texts.DUEL_NOT_YOURS, show_alert=True)
+            return
+
+        if callback.from_user.id == data["attacker_id"]:
+            await callback.answer(texts.DUEL_OWN, show_alert=True)
+            return
+
+        now = time.time()
+        elapsed = now - data["challenge_ts"]
+        if elapsed > DUEL_TIMEOUT:
+            _duels.pop(token, None)
+            await _safe_edit(callback, texts.DUEL_TIMED_OUT)
+            await callback.answer()
+            return
+
         storage = await get_storage(chat_id)
 
         a_str = str(data["attacker_id"])
@@ -296,14 +306,14 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             d_str = str(data["defender_id"])
 
             if d_str not in storage:
+                data["defender_id"] = 0  # keep the open duel claimable by others
                 await callback.answer(texts.DUEL_ACCEPT_MEASURE_FIRST, show_alert=True)
-                _duels[token] = data
                 return
 
             defender_size = storage[d_str]["size"]
             if defender_size <= 0:
+                data["defender_id"] = 0  # keep the open duel claimable by others
                 await callback.answer(texts.DUEL_ACCEPT_ZERO, show_alert=True)
-                _duels[token] = data
                 return
 
             stake = min(data["stake"], defender_size)
@@ -311,6 +321,8 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         else:
             d_str = str(data["defender_id"])
 
+        # Fight is committed — remove the token so it can't be replayed.
+        _duels.pop(token, None)
         stake = data["stake"]
         attacker = storage[a_str]
         defender = storage[d_str]

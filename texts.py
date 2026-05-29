@@ -9,6 +9,7 @@ length, logic and term consistency were cleaned up.
 """
 from __future__ import annotations
 
+import html
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -16,6 +17,11 @@ from zoneinfo import ZoneInfo
 # Primary slang term for the system/service messages. The humour arrays below
 # keep their own varied wording on purpose.
 DICK = "писюн"
+
+# Max lengths for free-text admin input (truncated before storing/displaying).
+MAX_NAME_LEN = 64
+MAX_QUERY_LEN = 64
+MAX_BAN_REASON_LEN = 200
 
 
 def fmt_datetime(ts: int) -> str:
@@ -62,7 +68,7 @@ TOP_HEADER = "🏆 Топ 10:\n"
 
 
 def top_line(rank: int, name: str, tag: str, size: int) -> str:
-    return f"{rank}. <b>{name}{tag}</b> ({size} см)"
+    return f"{rank}. <b>{html.escape(name)}{tag}</b> ({size} см)"
 
 
 # ----------------------------------------------------------------------- /me ---
@@ -188,6 +194,8 @@ HELP = (
     "/setbcast — (админам, внутри темы) выбрать тему для рассылок\n"
     "/unsetbcast — (админам) сбросить тему рассылок"
 )
+
+HELP_ADMIN = "\n\n/admin — панель глобального администратора (в личке с ботом)"
 
 
 # ------------------------------------------------------ /setbcast /unsetbcast ---
@@ -490,7 +498,7 @@ def admin_chats_page(total: int, page: int) -> str:
 
 
 def admin_chat_header(title: str, chat_id: int) -> str:
-    return f"💬 <b>{title}</b> (id {chat_id})"
+    return f"💬 <b>{html.escape(title)}</b> (id {chat_id})"
 
 
 def admin_chat_stats(players: int, total_size: int, biggest: int) -> str:
@@ -498,13 +506,13 @@ def admin_chat_stats(players: int, total_size: int, biggest: int) -> str:
 
 
 def admin_player_line(name: str, tag: str, size: int, user_id: int) -> str:
-    return f"{name}{tag} — {size} см (id {user_id})"
+    return f"{html.escape(name)}{tag} — {size} см (id {user_id})"
 
 
 def admin_player_header(name: str, tag: str, user_id: int, username: str, size: int, chat_id: int) -> str:
     return (
-        f"👤 <b>{name}</b>{tag}\n"
-        f"id: {user_id} | {username}\n"
+        f"👤 <b>{html.escape(name)}</b>{tag}\n"
+        f"id: {user_id} | {html.escape(username)}\n"
         f"Размер: <b>{size}</b> см\n"
         f"Чат: {chat_id}"
     )

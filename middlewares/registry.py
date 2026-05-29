@@ -42,6 +42,22 @@ class RegistryMiddleware(BaseMiddleware):
             self._bot_username = me.username or ""
         return f"https://t.me/{self._bot_username}?start=go"
 
+    async def _notify_banned(self, event: Any, db_user: Any) -> None:
+        """Tell a banned user why the bot ignores them, but only when they
+        actively try to use it (a command or a button press) — never on every
+        group message, to avoid spam."""
+        suffix = texts.ban_reason_suffix(db_user.notes)
+        if db_user.ban_until is not None:
+            suffix += texts.ban_until_suffix(texts.fmt_datetime(db_user.ban_until))
+        notice = texts.notify_user_banned(suffix)
+        try:
+            if isinstance(event, CallbackQuery):
+                await event.answer(notice, show_alert=True)
+            elif isinstance(event, Message) and event.text and event.text.startswith("/"):
+                await event.reply(notice)
+        except Exception:
+            pass
+
     async def __call__(
         self,
         handler: Callable[[Any, dict[str, Any]], Awaitable[Any]],
@@ -59,6 +75,7 @@ class RegistryMiddleware(BaseMiddleware):
                 if db_user.ban_until is not None and db_user.ban_until < time.time():
                     await chats_repo.set_user_banned(user.id, False)
                 else:
+                    await self._notify_banned(event, db_user)
                     return None
 
         if chat is not None:

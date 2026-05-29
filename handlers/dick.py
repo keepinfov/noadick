@@ -1,3 +1,4 @@
+import html
 import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -41,13 +42,14 @@ def _rank(storage: Storage, user_id: int) -> int:
 def _time_until_midnight(now: datetime) -> str:
     tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     delta = tomorrow - now
-    hours = delta.seconds // 3600
-    minutes = (delta.seconds % 3600) // 60
+    total = int(delta.total_seconds())
+    hours = total // 3600
+    minutes = (total % 3600) // 60
     return f"{hours} ч {minutes} мин"
 
 
 def _mention(user_id: int, name: str) -> str:
-    return f"<a href=\"tg://user?id={user_id}\">{name}</a>"
+    return f"<a href=\"tg://user?id={user_id}\">{html.escape(name)}</a>"
 
 
 @router.message(Command("dick"))

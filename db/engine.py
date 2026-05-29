@@ -61,3 +61,12 @@ async def init_db() -> None:
                     await conn.execute(
                         text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
                     )
+
+
+async def dispose_engine() -> None:
+    """Close the engine's connection pool on shutdown."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
