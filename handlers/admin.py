@@ -30,6 +30,7 @@ from repositories import players as players_repo
 from repositories import threads as threads_repo
 from services import admin_actions
 from services import global_settings
+from services import settings_view
 from services.admins import admin_ids
 from services.global_settings import get_config
 
@@ -210,6 +211,13 @@ async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
                 text=texts.BTN_UNBAN if banned else texts.BTN_BAN_CHAT,
                 callback_data=f"adm:{'uchat' if banned else 'bchat'}:{chat_id}",
             ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=texts.BTN_CHAT_SETTINGS, callback_data=f"adm:settings:{chat_id}"
+            )
         ]
     )
     rows.append([InlineKeyboardButton(text=texts.BTN_BACK_LIST, callback_data="adm:chats:0")])
@@ -402,6 +410,14 @@ async def cb_chat(callback: CallbackQuery) -> None:
     chat_id = int(parts[2])
     page = int(parts[3]) if len(parts) > 3 else 0
     text, kb = await render_chat(chat_id, page)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:settings:"))
+async def cb_chat_settings(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    chat_id = int(callback.data.split(":")[2])
+    text, kb = await settings_view.render_settings(chat_id, scope="global")
     await _edit(callback, text, kb)
 
 

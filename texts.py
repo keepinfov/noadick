@@ -529,6 +529,45 @@ def gset_field_label(label: str, value: int) -> str:
     return f"{label}: {value}"
 
 
+# ---- per-chat settings panel (global panel + local /settings) ----
+
+BTN_CHAT_SETTINGS = "⚙️ Настройки"
+BTN_CLOSE = "✖️ Закрыть"
+SETTINGS_TITLE = "⚙️ <b>Настройки чата</b>"
+SETTINGS_ENTER_TZ = (
+    "Введи часовой пояс (например <code>Europe/Moscow</code>):"
+)
+SETTINGS_BAD_TZ = "Неизвестный часовой пояс. Пример: Europe/Moscow."
+SETTINGS_NOT_ALLOWED = "Только администраторы чата могут менять настройки."
+
+
+def settings_screen(tz: str, diseases: bool, stake: int, timeout: int) -> str:
+    on_off = "вкл" if diseases else "выкл"
+    return (
+        f"{SETTINGS_TITLE}\n\n"
+        f"• Часовой пояс: <code>{html.escape(tz)}</code>\n"
+        f"• Болезни: {on_off}\n"
+        f"• Ставка дуэли: {stake}\n"
+        f"• Таймаут дуэли: {timeout} сек"
+    )
+
+
+def settings_btn_diseases(enabled: bool) -> str:
+    return f"🦠 Болезни: {'✅' if enabled else '❌'}"
+
+
+def settings_label_stake(value: int) -> str:
+    return f"Ставка дуэли: {value}"
+
+
+def settings_label_timeout(value: int) -> str:
+    return f"Таймаут дуэли: {value} сек"
+
+
+def settings_btn_tz(tz: str) -> str:
+    return f"🕒 Часовой пояс: {tz}"
+
+
 BTN_UNBAN_USER = "✅ Разбан юзера"
 BTN_MODE_ALL = "🌐 Все чаты"
 BTN_MODE_GROUPS = "👥 Только группы"

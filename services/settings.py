@@ -134,3 +134,28 @@ async def set_setting(chat_id: int, key: str, raw_value: str) -> None:
         await repo.upsert_settings(chat_id, duel_timeout=val)
 
     invalidate(chat_id)
+
+
+async def adjust(chat_id: int, key: str, delta: int) -> int:
+    """Clamp a numeric per-chat setting by ``delta`` within its bounds, persist,
+    and invalidate the cache. Returns the new value. Used by the button panels."""
+    eff = await get_effective(chat_id)
+    if key == "duel_stake":
+        val = max(MIN_DUEL_STAKE, min(MAX_DUEL_STAKE, eff.duel_stake_default + delta))
+        await repo.upsert_settings(chat_id, duel_stake_default=val)
+    elif key == "duel_timeout":
+        val = max(MIN_DUEL_TIMEOUT, min(MAX_DUEL_TIMEOUT, eff.duel_timeout + delta))
+        await repo.upsert_settings(chat_id, duel_timeout=val)
+    else:
+        raise SettingError(f"unknown_key:{key}")
+    invalidate(chat_id)
+    return val
+
+
+async def toggle_diseases(chat_id: int) -> bool:
+    """Flip the per-chat diseases switch; returns the new state."""
+    eff = await get_effective(chat_id)
+    new_val = not eff.diseases_enabled
+    await repo.upsert_settings(chat_id, diseases_enabled=new_val)
+    invalidate(chat_id)
+    return new_val
