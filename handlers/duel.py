@@ -18,6 +18,7 @@ from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
 from services import cooldown
+from services.global_settings import get_config_sync
 from services.settings import get_effective
 import texts
 from texts import (
@@ -29,10 +30,6 @@ from texts import (
 )
 
 router = Router()
-
-# Hard cap on simultaneous pending challenges from one user per chat, so a user
-# cannot spam the group with challenge messages.
-MAX_PENDING_DUELS = 3
 
 _duels: dict[str, dict] = {}
 # Strong refs to expiry tasks so they aren't garbage-collected mid-flight.
@@ -72,14 +69,12 @@ def _gen_token() -> str:
     return secrets.token_hex(4)
 
 
-SIZE_WEIGHT = 0.2
-
-
 def _calc_base_chance(attacker_size: int, defender_size: int) -> float:
     total = attacker_size + defender_size
     if total == 0:
         return 0.5
-    return 0.5 + (attacker_size - defender_size) / total * SIZE_WEIGHT
+    weight = get_config_sync().size_weight
+    return 0.5 + (attacker_size - defender_size) / total * weight
 
 
 def _resolve_fight(
@@ -177,7 +172,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
     chat_id = message.chat.id
 
     # Anti-flood: ignore rapid repeat invocations silently.
-    if not cooldown.check_and_touch(chat_id, user.id, "duel", 15):
+    if not cooldown.check_and_touch(chat_id, user.id, "duel", get_config_sync().cd_duel):
         return
 
     eff = await get_effective(chat_id)
@@ -190,7 +185,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         for d in _duels.values()
         if d["chat_id"] == chat_id and d["attacker_id"] == user.id
     )
-    if pending >= MAX_PENDING_DUELS:
+    if pending >= get_config_sync().max_pending_duels:
         await message.answer(texts.DUEL_TOO_MANY)
         return
 
@@ -202,7 +197,9 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         return
 
     if storage[a_str].get("chat_banned"):
-        if cooldown.check_and_touch(chat_id, user.id, "chat_ban_notice", 300):
+        if cooldown.check_and_touch(
+            chat_id, user.id, "chat_ban_notice", get_config_sync().cd_chat_ban_notice
+        ):
             await message.answer(texts.LOCAL_BANNED)
         return
 

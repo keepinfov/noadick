@@ -520,6 +520,15 @@ BTN_CANCEL = "❌ Отмена"
 BTN_OWN_REASON = "✏️ Своя причина"
 
 BTN_BCAST_HISTORY = "🗂 История рассылок"
+BTN_GLOBAL_SETTINGS = "⚙️ Глобальные настройки"
+
+ADMIN_GSET_TITLE = "⚙️ <b>Глобальные настройки</b>\nИзменения применяются сразу для всех чатов."
+
+
+def gset_field_label(label: str, value: int) -> str:
+    return f"{label}: {value}"
+
+
 BTN_UNBAN_USER = "✅ Разбан юзера"
 BTN_MODE_ALL = "🌐 Все чаты"
 BTN_MODE_GROUPS = "👥 Только группы"

@@ -22,6 +22,7 @@ from repositories.players import (
 )
 from services import cooldown
 from services.game import roll_delta
+from services.global_settings import get_config_sync
 from services.settings import get_effective, resolve_tz
 
 router = Router()
@@ -65,7 +66,9 @@ async def cmd_dick(message: Message) -> None:
         storage = await get_storage(chat_id)
 
         if uid_str in storage and storage[uid_str].get("chat_banned"):
-            if cooldown.check_and_touch(chat_id, user_id, "chat_ban_notice", 300):
+            if cooldown.check_and_touch(
+                chat_id, user_id, "chat_ban_notice", get_config_sync().cd_chat_ban_notice
+            ):
                 await message.answer(texts.LOCAL_BANNED)
             return
 
@@ -82,7 +85,9 @@ async def cmd_dick(message: Message) -> None:
                     await save_storage(chat_id, storage)
                 # Repeated /dick after today's play: answer at most once per
                 # minute so the command can't be used to flood the chat.
-                if not cooldown.check_and_touch(chat_id, user_id, "dick_repeat", 60):
+                if not cooldown.check_and_touch(
+                    chat_id, user_id, "dick_repeat", get_config_sync().cd_dick_repeat
+                ):
                     return
                 mention = _mention(user_id, user.first_name)
                 rank = _rank(storage, user_id)

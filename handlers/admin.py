@@ -29,7 +29,9 @@ from repositories import chats as chats_repo
 from repositories import players as players_repo
 from repositories import threads as threads_repo
 from services import admin_actions
+from services import global_settings
 from services.admins import admin_ids
+from services.global_settings import get_config
 
 router = Router()
 
@@ -92,6 +94,11 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=texts.BTN_BCAST_HISTORY, callback_data="adm:bhist:0"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_GLOBAL_SETTINGS, callback_data="adm:gset"
                 ),
             ],
         ]
@@ -653,13 +660,59 @@ async def cb_disease_set(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "adm:stats")
 async def cb_stats(callback: CallbackQuery) -> None:
     s = await chats_repo.global_stats()
-    active = await chats_repo.active_chat_count()
+    active = await chats_repo.active_chat_count(active_days=(await get_config()).active_days)
     text = texts.admin_global_stats(
         s['chats'], s['users'], s['players'], s['total_size'], active
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
     )
+    await _edit(callback, text, kb)
+
+
+# ---- global tunables panel (global admins only) ----
+
+
+async def render_gset() -> tuple[str, InlineKeyboardMarkup]:
+    cfg = await get_config()
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, label, small, big, _mn, _mx in global_settings.EDITABLE:
+        val = getattr(cfg, key)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.gset_field_label(label, val), callback_data="adm:noop"
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"−{big}", callback_data=f"adm:gadj:{key}:{-big}"),
+                InlineKeyboardButton(text=f"−{small}", callback_data=f"adm:gadj:{key}:{-small}"),
+                InlineKeyboardButton(text=f"+{small}", callback_data=f"adm:gadj:{key}:{small}"),
+                InlineKeyboardButton(text=f"+{big}", callback_data=f"adm:gadj:{key}:{big}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
+    return texts.ADMIN_GSET_TITLE, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "adm:gset")
+async def cb_gset(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    text, kb = await render_gset()
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:gadj:"))
+async def cb_gadj(callback: CallbackQuery) -> None:
+    _, _, key, delta = callback.data.split(":")
+    try:
+        await global_settings.adjust(key, int(delta))
+    except KeyError:
+        await callback.answer()
+        return
+    text, kb = await render_gset()
     await _edit(callback, text, kb)
 
 
@@ -825,16 +878,14 @@ async def cb_bcast_mode(callback: CallbackQuery, state: FSMContext) -> None:
         await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
         return
     await state.update_data(bcast_mode=mode)
-    targets = await admin_actions.broadcast_targets(mode)
+    targets = await admin_actions.broadcast_targets(
+        mode, active_days=(await get_config()).active_days
+    )
     await _edit(
         callback,
         texts.admin_bcast_mode_preview(text, texts.bcast_mode_label(mode), len(targets)),
         _confirm_kb("adm:yes:bcast", "adm:bpick"),
     )
-
-
-# Pause between broadcast sends to stay under Telegram's ~30 msg/s flood cap.
-BCAST_RATE_DELAY = 0.05
 
 
 async def _bcast_send(bot: Bot, chat_id: int, text: str, thread_id: int | None) -> bool:
@@ -862,10 +913,13 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
         await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
         return
     mode = data.get("bcast_mode", "all")
+    cfg = await get_config()
     if callback.message is not None:
         await callback.message.edit_text(texts.ADMIN_BCAST_STARTED)
     await callback.answer()
-    targets = await admin_actions.broadcast_targets(mode)
+    targets = await admin_actions.broadcast_targets(mode, active_days=cfg.active_days)
+    # Pause between sends to stay under Telegram's ~30 msg/s flood cap.
+    rate_delay = cfg.bcast_rate_delay
     sent = 0
     failed = 0
     for chat_id in targets:
@@ -877,7 +931,7 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
         failed += int(not ok)
         if ok and reason == "auto":
             await _bcast_send(bot, chat_id, texts.ADMIN_BCAST_AUTO_TOPIC, thread_id)
-        await asyncio.sleep(BCAST_RATE_DELAY)
+        await asyncio.sleep(rate_delay)
     await admin_actions.log_broadcast(
         callback.from_user.id, text[: texts.MAX_BCAST_PREVIEW_LEN], mode, sent, failed
     )

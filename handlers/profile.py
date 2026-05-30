@@ -9,6 +9,7 @@ from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
 from services import cooldown
 from services import stats as S
+from services.global_settings import get_config_sync
 
 router = Router()
 
@@ -81,7 +82,7 @@ async def _send_global_profile(message: Message, user_id: int, name: str | None)
 async def cmd_me(message: Message, bot: Bot) -> None:
     requester = message.from_user
     if requester is not None and not cooldown.check_and_touch(
-        message.chat.id, requester.id, "me", 30
+        message.chat.id, requester.id, "me", get_config_sync().cd_me
     ):
         return
 

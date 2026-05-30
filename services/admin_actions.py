@@ -201,10 +201,12 @@ async def unban_chat(actor_id: int, chat_id: int) -> ActionResult:
     return ActionResult(ok, texts.res_chat_unbanned(chat_id) if ok else texts.RES_CHAT_NOT_FOUND)
 
 
-async def broadcast_targets(mode: str = "all") -> list[int]:
+async def broadcast_targets(mode: str = "all", active_days: int | None = None) -> list[int]:
     """Chat ids for a broadcast, filtered by target mode (excludes banned chats).
     Sending is done by the caller, which has access to the bot instance."""
-    return await chats_repo.chat_ids_by_mode(mode)
+    if active_days is None:
+        return await chats_repo.chat_ids_by_mode(mode)
+    return await chats_repo.chat_ids_by_mode(mode, active_days=active_days)
 
 
 async def log_broadcast(

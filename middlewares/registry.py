@@ -21,6 +21,7 @@ from repositories import chats as chats_repo
 from repositories import threads as threads_repo
 from services import cooldown
 from services.admins import is_global_admin
+from services.global_settings import get_config_sync
 from services.registry import chat_hash, relink_legacy
 
 
@@ -78,7 +79,9 @@ class RegistryMiddleware(BaseMiddleware):
                 else:
                     # Notify at most once per 5 min per user so a banned user
                     # can't make the bot flood by spamming commands/buttons.
-                    if cooldown.check_and_touch(0, user.id, "ban_notice", 300):
+                    if cooldown.check_and_touch(
+                        0, user.id, "ban_notice", get_config_sync().cd_ban_notice
+                    ):
                         await self._notify_banned(event, db_user)
                     return None
 
@@ -112,7 +115,9 @@ class RegistryMiddleware(BaseMiddleware):
             if await chats_repo.get_chat(user.id) is None:
                 # Reply at most once per 5 min per user so repeated commands
                 # before opening the DM don't turn into a reply flood.
-                if cooldown.check_and_touch(chat.id, user.id, "dm_gate", 300):
+                if cooldown.check_and_touch(
+                    chat.id, user.id, "dm_gate", get_config_sync().cd_dm_gate
+                ):
                     bot: Bot = data["bot"]
                     link = await self._bot_link(bot)
                     kb = InlineKeyboardMarkup(

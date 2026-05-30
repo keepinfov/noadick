@@ -6,6 +6,7 @@ import texts
 from handlers.profile import _send_global_profile
 from services import cooldown
 from services.admins import is_global_admin
+from services.global_settings import get_config_sync
 
 router = Router()
 
@@ -22,7 +23,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
 async def cmd_help(message: Message) -> None:
     user = message.from_user
     if user is not None and not cooldown.check_and_touch(
-        message.chat.id, user.id, "help", 30
+        message.chat.id, user.id, "help", get_config_sync().cd_help
     ):
         return
     text = texts.HELP

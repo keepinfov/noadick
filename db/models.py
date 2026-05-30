@@ -147,6 +147,32 @@ class ChatThreadStat(Base):
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
+class GlobalSettings(Base):
+    """Process-wide tunables, edited from the admin panel (global admins only).
+    Single row (id=1); a missing row means "use the hardcoded defaults". Defaults
+    here mirror the historical hardcoded constants, so a fresh deploy behaves
+    identically until an admin changes something."""
+
+    __tablename__ = "global_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    cd_dick_repeat: Mapped[int] = mapped_column(Integer, default=60)
+    cd_duel: Mapped[int] = mapped_column(Integer, default=15)
+    cd_top: Mapped[int] = mapped_column(Integer, default=30)
+    cd_me: Mapped[int] = mapped_column(Integer, default=30)
+    cd_ping: Mapped[int] = mapped_column(Integer, default=10)
+    cd_help: Mapped[int] = mapped_column(Integer, default=30)
+    cd_chat_ban_notice: Mapped[int] = mapped_column(Integer, default=300)
+    cd_ban_notice: Mapped[int] = mapped_column(Integer, default=300)
+    cd_dm_gate: Mapped[int] = mapped_column(Integer, default=300)
+    max_pending_duels: Mapped[int] = mapped_column(Integer, default=3)
+    size_weight_pct: Mapped[int] = mapped_column(Integer, default=20)
+    bcast_rate_delay_ms: Mapped[int] = mapped_column(Integer, default=50)
+    active_days: Mapped[int] = mapped_column(Integer, default=30)
+    page_size: Mapped[int] = mapped_column(Integer, default=8)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
 class ChatSettings(Base):
     """Per-chat overrides for gameplay knobs. Missing row / NULL field means
     "use the process-wide default" (env TZ, hardcoded duel params, etc.)."""

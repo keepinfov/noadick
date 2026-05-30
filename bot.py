@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from db.engine import dispose_engine, init_db
 from handlers import admin, dick, duel, help, modtools, ping, profile, settings, top
 from middlewares.registry import RegistryMiddleware
+from services import global_settings
 
 
 async def main() -> None:
@@ -23,6 +24,7 @@ async def main() -> None:
     )
 
     await init_db()
+    await global_settings.refresh()
 
     token = os.environ["BOT_TOKEN"]
 
