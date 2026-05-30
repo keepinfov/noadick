@@ -5,7 +5,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import texts
 from repositories import threads as threads_repo
@@ -139,6 +139,14 @@ async def cb_st_adjust(callback: CallbackQuery, bot: Bot) -> None:
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(F.data.startswith("st:show:"))
+async def cb_st_show(callback: CallbackQuery, state: FSMContext) -> None:
+    # Re-open the settings panel (e.g. cancelling the TZ text prompt).
+    await state.set_state(None)
+    chat_id = int(callback.data.split(":")[2])
+    await _rerender(callback, chat_id)
+
+
 @router.callback_query(F.data.startswith("st:tz:"))
 async def cb_st_tz(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     chat_id = int(callback.data.split(":")[2])
@@ -148,7 +156,13 @@ async def cb_st_tz(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None
     await state.set_state(SettingsStates.set_tz)
     await state.update_data(tz_chat_id=chat_id, tz_scope=_scope(callback))
     if callback.message is not None:
-        await callback.message.edit_text(texts.SETTINGS_ENTER_TZ)
+        # Always offer a way out of the text-input prompt.
+        cancel_kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data=f"st:show:{chat_id}")]
+            ]
+        )
+        await callback.message.edit_text(texts.SETTINGS_ENTER_TZ, reply_markup=cancel_kb)
     await callback.answer()
 
 
