@@ -518,6 +518,7 @@ def pager_indicator(page: int, pages: int, total: int) -> str:
     return f"{page + 1}/{pages} ({total})"
 BTN_BACK_LIST = "« К списку"
 BTN_BACK_CHAT = "« К чату"
+BTN_BACK_FIND = "« К результатам поиска"
 BTN_BACK = "« Назад"
 BTN_YES = "✅ Да"
 BTN_CANCEL = "❌ Отмена"

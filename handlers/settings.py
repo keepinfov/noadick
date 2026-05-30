@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -86,7 +87,13 @@ async def _may_edit_settings(callback: CallbackQuery, bot: Bot, chat_id: int) ->
 async def _rerender(callback: CallbackQuery, chat_id: int) -> None:
     text, kb = await settings_view.render_settings(chat_id, scope=_scope(callback))
     if callback.message is not None:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except TelegramBadRequest as e:
+            # Re-clicking an already-active option re-renders identical content;
+            # Telegram's "message is not modified" is benign here.
+            if "message is not modified" not in str(e).lower():
+                raise
     await callback.answer()
 
 

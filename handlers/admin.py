@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -280,11 +280,22 @@ async def render_chat(
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def render_player(chat_id: int, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+async def render_player(
+    chat_id: int, user_id: int, *, back_data: str | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
+    # When reached from search results, `back_data` points back at those results
+    # (e.g. "adm:fp:0") so the admin returns to their search instead of being
+    # dropped into the player's chat. Falls back to the chat view otherwise.
+    if back_data is not None:
+        back_btn = InlineKeyboardButton(text=texts.BTN_BACK_FIND, callback_data=back_data)
+    else:
+        back_btn = InlineKeyboardButton(
+            text=texts.BTN_BACK_CHAT, callback_data=f"adm:chat:{chat_id}"
+        )
     p = await players_repo.get_player(chat_id, user_id)
     if p is None:
         return texts.ADMIN_PLAYER_NOT_FOUND, InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_BACK, callback_data=f"adm:chat:{chat_id}")]]
+            inline_keyboard=[[back_btn]]
         )
     user = await chats_repo.get_user(user_id)
     username = f"@{user.username}" if user and user.username else "—"
@@ -320,7 +331,7 @@ async def render_player(chat_id: int, user_id: int) -> tuple[str, InlineKeyboard
         ],
         [
             ban_btn,
-            InlineKeyboardButton(text=texts.BTN_BACK_CHAT, callback_data=f"adm:chat:{chat_id}"),
+            back_btn,
         ],
     ]
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -338,7 +349,14 @@ def disease_kb(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
 
 async def _edit(callback: CallbackQuery, text: str, kb: InlineKeyboardMarkup | None) -> None:
     if callback.message is not None:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except TelegramBadRequest as e:
+            # Re-clicking an already-active option re-renders identical content;
+            # Telegram rejects it with "message is not modified". That's benign —
+            # swallow it so the button stops spinning instead of erroring out.
+            if "message is not modified" not in str(e).lower():
+                raise
     await callback.answer()
 
 
@@ -623,6 +641,17 @@ async def cb_player(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     _, _, chat_id, user_id = callback.data.split(":")
     text, kb = await render_player(int(chat_id), int(user_id))
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:pf:"))
+async def cb_player_from_find(callback: CallbackQuery, state: FSMContext) -> None:
+    # Same player view, but reached from search results. Keep find_query_text in
+    # FSM data (only drop the active input state) so the player's Back button can
+    # return to the results via adm:fp:0.
+    await state.set_state(None)
+    _, _, chat_id, user_id = callback.data.split(":")
+    text, kb = await render_player(int(chat_id), int(user_id), back_data="adm:fp:0")
     await _edit(callback, text, kb)
 
 
@@ -993,7 +1022,7 @@ async def render_find(query: str, page: int) -> tuple[str, InlineKeyboardMarkup]
         [
             InlineKeyboardButton(
                 text=texts.admin_find_result_line(p.name, p.size, p.chat_id),
-                callback_data=f"adm:p:{p.chat_id}:{p.user_id}",
+                callback_data=f"adm:pf:{p.chat_id}:{p.user_id}",
             )
         ]
         for p in window
