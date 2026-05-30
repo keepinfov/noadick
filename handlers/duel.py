@@ -14,6 +14,7 @@ from models.disease import (
     disease_tag,
     try_infect,
 )
+from handlers import cooldowns
 from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
@@ -171,8 +172,8 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     chat_id = message.chat.id
 
-    # Anti-flood: ignore rapid repeat invocations silently.
-    if not cooldown.check_and_touch(chat_id, user.id, "duel", get_config_sync().cd_duel):
+    # Anti-flood: throttle rapid repeat invocations, with a one-shot notice.
+    if not await cooldowns.passes(message, user.id, "duel", get_config_sync().cd_duel):
         return
 
     eff = await get_effective(chat_id)

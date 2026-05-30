@@ -229,6 +229,10 @@ DM_GATE = (
 # Shown to a player blocked locally (per-chat) by a chat admin.
 LOCAL_BANNED = "🚫 Админ чата заблокировал тебя в этой игре."
 
+# Transient "you're on cooldown" reply — shown at most once per cooldown window
+# and self-deleted after a few seconds so it doesn't clutter the chat.
+COOLDOWN_NOTICE = "⏳ Не так быстро — команда на кулдауне. Подожди немного."
+
 MOD_NEED_TARGET = (
     "Ответь командой на сообщение игрока или укажи его числовой id: "
     "<code>/localban 123456789</code>."

@@ -5,9 +5,9 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import texts
+from handlers import cooldowns
 from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
-from services import cooldown
 from services import stats as S
 from services.global_settings import get_config_sync
 
@@ -81,8 +81,8 @@ async def _send_global_profile(message: Message, user_id: int, name: str | None)
 @router.message(Command("me"))
 async def cmd_me(message: Message, bot: Bot) -> None:
     requester = message.from_user
-    if requester is not None and not cooldown.check_and_touch(
-        message.chat.id, requester.id, "me", get_config_sync().cd_me
+    if requester is not None and not await cooldowns.passes(
+        message, requester.id, "me", get_config_sync().cd_me
     ):
         return
 
