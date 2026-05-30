@@ -217,7 +217,10 @@ async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
         [
             InlineKeyboardButton(
                 text=texts.BTN_CHAT_SETTINGS, callback_data=f"adm:settings:{chat_id}"
-            )
+            ),
+            InlineKeyboardButton(
+                text=texts.BTN_LOCAL_BANS, callback_data=f"adm:lban:{chat_id}:0"
+            ),
         ]
     )
     rows.append([InlineKeyboardButton(text=texts.BTN_BACK_LIST, callback_data="adm:chats:0")])
@@ -419,6 +422,54 @@ async def cb_chat_settings(callback: CallbackQuery, state: FSMContext) -> None:
     chat_id = int(callback.data.split(":")[2])
     text, kb = await settings_view.render_settings(chat_id, scope="global")
     await _edit(callback, text, kb)
+
+
+async def render_local_bans(chat_id: int, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    total = await players_repo.count_chat_banned(chat_id)
+    offset = page * PLAYERS_PER_CHAT
+    banned = await players_repo.list_chat_banned(chat_id, offset, PLAYERS_PER_CHAT)
+
+    lines = [texts.admin_local_bans_page(total, page)]
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in banned:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.admin_local_unban_btn(p.name),
+                    callback_data=f"adm:lunban:{chat_id}:{p.user_id}",
+                )
+            ]
+        )
+    if not banned:
+        lines.append("")
+        lines.append(texts.ADMIN_NO_LOCAL_BANS)
+
+    nav = _pager(f"adm:lban:{chat_id}", page, total, PLAYERS_PER_CHAT)
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text=texts.BTN_BACK_CHAT, callback_data=f"adm:chat:{chat_id}")]
+    )
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("adm:lban:"))
+async def cb_local_bans(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    chat_id = int(parts[2])
+    page = int(parts[3]) if len(parts) > 3 else 0
+    text, kb = await render_local_bans(chat_id, page)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:lunban:"))
+async def cb_local_unban(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    chat_id, user_id = int(parts[2]), int(parts[3])
+    res = await admin_actions.local_unban(callback.from_user.id, chat_id, user_id)
+    text, kb = await render_local_bans(chat_id, 0)
+    await _edit(callback, text, kb)
+    await callback.answer(res.message, show_alert=True)
 
 
 @router.callback_query(F.data.startswith("adm:p:"))

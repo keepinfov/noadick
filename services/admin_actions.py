@@ -162,6 +162,26 @@ async def reset_chat(actor_id: int, chat_id: int) -> ActionResult:
     return ActionResult(True, texts.res_chat_reset(n))
 
 
+async def local_unban(
+    actor_id: int, chat_id: int, user_id: int
+) -> ActionResult:
+    """Lift a per-chat (local) ban on a player; records an audit entry."""
+    async with get_chat_lock(chat_id):
+        p = await players_repo.get_player(chat_id, user_id)
+        name = p.name if p else str(user_id)
+        was_banned = bool(p and p.is_chat_banned)
+        if was_banned:
+            await players_repo.set_player_fields(
+                chat_id, user_id, is_chat_banned=False
+            )
+    if not was_banned:
+        return ActionResult(False, texts.mod_localunban_already(name))
+    await _audit(
+        actor_id, "local_unban", target_chat=chat_id, target_user=user_id,
+    )
+    return ActionResult(True, texts.mod_localunban_done(name))
+
+
 async def ban_user(
     actor_id: int,
     user_id: int,

@@ -529,6 +529,20 @@ def gset_field_label(label: str, value: int) -> str:
     return f"{label}: {value}"
 
 
+# ---- per-chat local bans (global panel) ----
+
+BTN_LOCAL_BANS = "🚫 Локальные баны"
+ADMIN_NO_LOCAL_BANS = "В этом чате нет локально забаненных игроков."
+
+
+def admin_local_bans_page(total: int, page: int) -> str:
+    return f"🚫 <b>Локальные баны</b> · всего: {total} · стр. {page + 1}"
+
+
+def admin_local_unban_btn(name: str) -> str:
+    return f"✅ Разбанить {name}"
+
+
 # ---- per-chat settings panel (global panel + local /settings) ----
 
 BTN_CHAT_SETTINGS = "⚙️ Настройки"

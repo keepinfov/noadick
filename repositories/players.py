@@ -147,6 +147,36 @@ async def count_players(chat_id: int) -> int:
         ).scalar_one()
 
 
+async def list_chat_banned(
+    chat_id: int, offset: int, limit: int
+) -> list[Player]:
+    """Players locally banned in a chat (is_chat_banned), name-ordered, paged."""
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(Player)
+                .where(Player.chat_id == chat_id, Player.is_chat_banned.is_(True))
+                .order_by(Player.name)
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars().all()
+        return list(rows)
+
+
+async def count_chat_banned(chat_id: int) -> int:
+    factory = get_session_factory()
+    async with factory() as session:
+        return (
+            await session.execute(
+                select(func.count(Player.user_id)).where(
+                    Player.chat_id == chat_id, Player.is_chat_banned.is_(True)
+                )
+            )
+        ).scalar_one()
+
+
 async def get_rank(chat_id: int, user_id: int) -> int:
     players = await list_players(chat_id)
     for i, p in enumerate(players):
