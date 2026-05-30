@@ -58,12 +58,13 @@ async def list_chats(offset: int = 0, limit: int = 10) -> list[Chat]:
         return list(rows)
 
 
-async def count_chats() -> int:
+async def count_chats(name_filter: str | None = None) -> int:
     factory = get_session_factory()
     async with factory() as session:
-        return (
-            await session.execute(select(func.count(Chat.chat_id)))
-        ).scalar_one()
+        stmt = select(func.count(Chat.chat_id))
+        if name_filter:
+            stmt = stmt.where(Chat.title.ilike(f"%{name_filter}%"))
+        return (await session.execute(stmt)).scalar_one()
 
 
 async def all_chat_ids(include_banned: bool = False) -> list[int]:
@@ -114,20 +115,40 @@ async def chat_ids_by_mode(
 
 
 async def list_chats_with_owner(
-    offset: int = 0, limit: int = 10
+    offset: int = 0,
+    limit: int = 10,
+    sort: str = "n",
+    name_filter: str | None = None,
 ) -> list[tuple[Chat, User | None]]:
     """Like list_chats, but also returns the owner User for private chats
-    (DM chat_id == owner user_id) so DMs can be labeled by name/username."""
+    (DM chat_id == owner user_id) so DMs can be labeled by name/username.
+
+    ``sort`` is a whitelisted code (never interpolated): n=title, a=last
+    activity, c=newest, s=player count. ``name_filter`` matches the title."""
     factory = get_session_factory()
     async with factory() as session:
+        pc = (
+            select(Player.chat_id.label("cid"), func.count().label("pc"))
+            .group_by(Player.chat_id)
+            .subquery()
+        )
+        stmt = (
+            select(Chat, User)
+            .outerjoin(User, User.user_id == Chat.chat_id)
+            .outerjoin(pc, pc.c.cid == Chat.chat_id)
+        )
+        if name_filter:
+            stmt = stmt.where(Chat.title.ilike(f"%{name_filter}%"))
+        if sort == "a":
+            stmt = stmt.order_by(Chat.updated_at.desc())
+        elif sort == "c":
+            stmt = stmt.order_by(Chat.created_at.desc())
+        elif sort == "s":
+            stmt = stmt.order_by(func.coalesce(pc.c.pc, 0).desc())
+        else:
+            stmt = stmt.order_by(Chat.title)
         rows = (
-            await session.execute(
-                select(Chat, User)
-                .outerjoin(User, User.user_id == Chat.chat_id)
-                .order_by(Chat.title)
-                .offset(offset)
-                .limit(limit)
-            )
+            await session.execute(stmt.offset(offset).limit(limit))
         ).all()
         return [(chat, user) for chat, user in rows]
 

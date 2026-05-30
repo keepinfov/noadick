@@ -543,6 +543,50 @@ def admin_local_unban_btn(name: str) -> str:
     return f"✅ Разбанить {name}"
 
 
+# ---- sort / filter / breadcrumbs (admin lists) ----
+
+BTN_FILTER = "🔎 Фильтр"
+BTN_FILTER_CLEAR = "✖️ Сбросить фильтр"
+ADMIN_ENTER_FILTER_CHATS = "Введи часть названия чата для фильтра:"
+ADMIN_ENTER_FILTER_PLAYERS = "Введи часть имени игрока для фильтра:"
+
+CHAT_SORTS: list[tuple[str, str]] = [
+    ("n", "Имя"),
+    ("a", "Актив."),
+    ("s", "Игроки"),
+    ("c", "Новые"),
+]
+PLAYER_SORTS: list[tuple[str, str]] = [
+    ("s", "Размер"),
+    ("n", "Имя"),
+    ("a", "Актив."),
+]
+
+
+def crumb(*parts: str) -> str:
+    return "🏠 › " + " › ".join(parts)
+
+
+def sort_btn(label: str, active: bool) -> str:
+    return f"• {label}" if active else label
+
+
+def admin_chats_overview(total: int, active: int, page: int, filt: str | None) -> str:
+    head = crumb("Чаты")
+    stats = f"Всего: {total} · активных: {active}"
+    if filt:
+        stats += f" · фильтр: «{html.escape(filt)}»"
+    return f"{head}\n{stats} · стр. {page + 1}"
+
+
+def admin_chat_banned_count(n: int) -> str:
+    return f"Локальных банов: {n}"
+
+
+def admin_filter_note(filt: str, matches: int) -> str:
+    return f"🔎 Фильтр: «{html.escape(filt)}» · совпадений: {matches}"
+
+
 # ---- per-chat settings panel (global panel + local /settings) ----
 
 BTN_CHAT_SETTINGS = "⚙️ Настройки"

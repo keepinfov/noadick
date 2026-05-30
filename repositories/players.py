@@ -121,30 +121,39 @@ async def top_players(chat_id: int, limit: int = 10) -> list[Player]:
 
 
 async def list_players_page(
-    chat_id: int, offset: int, limit: int
+    chat_id: int,
+    offset: int,
+    limit: int,
+    sort: str = "s",
+    name_filter: str | None = None,
 ) -> list[Player]:
+    """One page of a chat's players. ``sort`` is a whitelisted code (never
+    interpolated): s=size, n=name, a=last activity. ``name_filter`` matches the
+    player name."""
     factory = get_session_factory()
     async with factory() as session:
+        stmt = select(Player).where(Player.chat_id == chat_id)
+        if name_filter:
+            stmt = stmt.where(Player.name.ilike(f"%{name_filter}%"))
+        if sort == "n":
+            stmt = stmt.order_by(Player.name)
+        elif sort == "a":
+            stmt = stmt.order_by(Player.last_play.desc())
+        else:
+            stmt = stmt.order_by(Player.size.desc())
         rows = (
-            await session.execute(
-                select(Player)
-                .where(Player.chat_id == chat_id)
-                .order_by(Player.size.desc())
-                .offset(offset)
-                .limit(limit)
-            )
+            await session.execute(stmt.offset(offset).limit(limit))
         ).scalars().all()
         return list(rows)
 
 
-async def count_players(chat_id: int) -> int:
+async def count_players(chat_id: int, name_filter: str | None = None) -> int:
     factory = get_session_factory()
     async with factory() as session:
-        return (
-            await session.execute(
-                select(func.count(Player.user_id)).where(Player.chat_id == chat_id)
-            )
-        ).scalar_one()
+        stmt = select(func.count(Player.user_id)).where(Player.chat_id == chat_id)
+        if name_filter:
+            stmt = stmt.where(Player.name.ilike(f"%{name_filter}%"))
+        return (await session.execute(stmt)).scalar_one()
 
 
 async def list_chat_banned(

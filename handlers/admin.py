@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from collections.abc import Callable
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramRetryAfter
@@ -57,6 +58,12 @@ class AdminStates(StatesGroup):
     broadcast_confirm = State()
     ban_reason = State()
     ban_duration = State()
+    filter_chats = State()
+    filter_players = State()
+
+
+CHAT_SORT_CODES = {c for c, _ in texts.CHAT_SORTS}
+PLAYER_SORT_CODES = {c for c, _ in texts.PLAYER_SORTS}
 
 
 BAN_REASONS = texts.BAN_REASONS
@@ -133,11 +140,38 @@ def _pager(prefix: str, page: int, total: int, per_page: int) -> list[InlineKeyb
     return row
 
 
-async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
+def _sort_row(
+    options: list[tuple[str, str]], active: str, cb: Callable[[str], str]
+) -> list[InlineKeyboardButton]:
+    """A row of sort-toggle buttons; the active one is marked. `cb` maps a sort
+    code to its callback_data (which resets to page 0 with that sort)."""
+    return [
+        InlineKeyboardButton(
+            text=texts.sort_btn(label, code == active), callback_data=cb(code)
+        )
+        for code, label in options
+    ]
+
+
+def _filter_row(enter_data: str, clear_data: str | None) -> list[InlineKeyboardButton]:
+    row = [InlineKeyboardButton(text=texts.BTN_FILTER, callback_data=enter_data)]
+    if clear_data is not None:
+        row.append(
+            InlineKeyboardButton(text=texts.BTN_FILTER_CLEAR, callback_data=clear_data)
+        )
+    return row
+
+
+async def render_chats(
+    page: int, sort: str = "n", name_filter: str | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
     per_page = (await get_config()).page_size
-    total = await chats_repo.count_chats()
+    total = await chats_repo.count_chats(name_filter)
+    active = await chats_repo.active_chat_count(active_days=(await get_config()).active_days)
     offset = page * per_page
-    chats = await chats_repo.list_chats_with_owner(offset=offset, limit=per_page)
+    chats = await chats_repo.list_chats_with_owner(
+        offset=offset, limit=per_page, sort=sort, name_filter=name_filter
+    )
 
     rows: list[list[InlineKeyboardButton]] = []
     for c, owner in chats:
@@ -153,22 +187,31 @@ async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
             [InlineKeyboardButton(text=f"{flag}{label}", callback_data=f"adm:chat:{c.chat_id}")]
         )
 
-    nav = _pager("adm:chats", page, total, per_page)
+    rows.append(_sort_row(texts.CHAT_SORTS, sort, lambda s: f"adm:chats:{s}:0"))
+    clear = f"adm:cfchats:{sort}" if name_filter else None
+    rows.append(_filter_row(f"adm:fchats:{sort}", clear))
+
+    nav = _pager(f"adm:chats:{sort}", page, total, per_page)
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
 
-    text = texts.admin_chats_page(total, page)
+    text = texts.admin_chats_overview(total, active, page, name_filter)
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+async def render_chat(
+    chat_id: int, page: int = 0, sort: str = "s", name_filter: str | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
     per_page = (await get_config()).page_size
     chat = await chats_repo.get_chat(chat_id)
     stats = await players_repo.chat_player_stats(chat_id)
-    total_players = stats['players']
+    banned_count = await players_repo.count_chat_banned(chat_id)
+    total_players = await players_repo.count_players(chat_id, name_filter)
     offset = page * per_page
-    players = await players_repo.list_players_page(chat_id, offset, per_page)
+    players = await players_repo.list_players_page(
+        chat_id, offset, per_page, sort=sort, name_filter=name_filter
+    )
 
     if chat and chat.type == "private":
         owner = await chats_repo.get_user(chat_id)
@@ -182,10 +225,14 @@ async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
         title = (chat.title if chat and chat.title else str(chat_id))
     banned = chat and chat.is_banned
     lines = [
+        texts.crumb("Чаты", title),
         texts.admin_chat_header(title, chat_id),
-        texts.admin_chat_stats(total_players, stats['total_size'], stats['biggest']),
-        "",
+        texts.admin_chat_stats(stats['players'], stats['total_size'], stats['biggest']),
+        texts.admin_chat_banned_count(banned_count),
     ]
+    if name_filter:
+        lines.append(texts.admin_filter_note(name_filter, total_players))
+    lines.append("")
     rows: list[list[InlineKeyboardButton]] = []
     for p in players:
         rows.append(
@@ -199,7 +246,13 @@ async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
     if not players:
         lines.append(texts.ADMIN_NO_PLAYERS)
 
-    nav = _pager(f"adm:chat:{chat_id}", page, total_players, per_page)
+    rows.append(
+        _sort_row(texts.PLAYER_SORTS, sort, lambda s: f"adm:chat:{chat_id}:{s}:0")
+    )
+    clear = f"adm:cfchat:{chat_id}:{sort}" if name_filter else None
+    rows.append(_filter_row(f"adm:fchat:{chat_id}:{sort}", clear))
+
+    nav = _pager(f"adm:chat:{chat_id}:{sort}", page, total_players, per_page)
     if nav:
         rows.append(nav)
 
@@ -399,20 +452,111 @@ async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+def _parse_sort_page(rest: list[str], default_sort: str, valid: set[str]) -> tuple[str, int]:
+    """Tolerantly parse the trailing [sort?][page?] segments of a list callback.
+    Accepts the legacy bare-page form and the new sort+page form."""
+    sort, page = default_sort, 0
+    if len(rest) == 1:
+        if rest[0].isdigit():
+            page = int(rest[0])
+        elif rest[0] in valid:
+            sort = rest[0]
+    elif len(rest) >= 2:
+        if rest[0] in valid:
+            sort = rest[0]
+        page = int(rest[1]) if rest[1].isdigit() else 0
+    return sort, page
+
+
 @router.callback_query(F.data.startswith("adm:chats:"))
-async def cb_chats(callback: CallbackQuery) -> None:
-    page = int(callback.data.split(":")[2])
-    text, kb = await render_chats(page)
+async def cb_chats(callback: CallbackQuery, state: FSMContext) -> None:
+    sort, page = _parse_sort_page(callback.data.split(":")[2:], "n", CHAT_SORT_CODES)
+    name_filter = (await state.get_data()).get("chats_filter")
+    text, kb = await render_chats(page, sort, name_filter)
     await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:fchats:"))
+async def cb_filter_chats(callback: CallbackQuery, state: FSMContext) -> None:
+    sort = callback.data.split(":")[2]
+    await state.set_state(AdminStates.filter_chats)
+    await state.update_data(filter_sort=sort)
+    await _edit(callback, texts.ADMIN_ENTER_FILTER_CHATS, None)
+
+
+@router.callback_query(F.data.startswith("adm:cfchats:"))
+async def cb_clear_filter_chats(callback: CallbackQuery, state: FSMContext) -> None:
+    sort = callback.data.split(":")[2]
+    await state.update_data(chats_filter=None)
+    await state.set_state(None)
+    text, kb = await render_chats(0, sort, None)
+    await _edit(callback, text, kb)
+
+
+@router.message(AdminStates.filter_chats)
+async def msg_filter_chats(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    sort = data.get("filter_sort", "n")
+    query = (message.text or "").strip()[: texts.MAX_QUERY_LEN]
+    # Keep the filter in FSM data (no active input state) so pagination/sort can
+    # re-apply it; an empty query clears it.
+    await state.set_state(None)
+    await state.update_data(chats_filter=query or None)
+    text, kb = await render_chats(0, sort, query or None)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def _player_filter_for(data: dict, chat_id: int) -> str | None:
+    """Player filters are scoped to a chat so they don't leak between chats."""
+    if data.get("players_filter_chat") == chat_id:
+        return data.get("players_filter")
+    return None
 
 
 @router.callback_query(F.data.startswith("adm:chat:"))
-async def cb_chat(callback: CallbackQuery) -> None:
+async def cb_chat(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     chat_id = int(parts[2])
-    page = int(parts[3]) if len(parts) > 3 else 0
-    text, kb = await render_chat(chat_id, page)
+    sort, page = _parse_sort_page(parts[3:], "s", PLAYER_SORT_CODES)
+    name_filter = _player_filter_for(await state.get_data(), chat_id)
+    text, kb = await render_chat(chat_id, page, sort, name_filter)
     await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:fchat:"))
+async def cb_filter_players(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")
+    chat_id, sort = int(parts[2]), parts[3]
+    await state.set_state(AdminStates.filter_players)
+    await state.update_data(filter_chat=chat_id, filter_sort=sort)
+    await _edit(callback, texts.ADMIN_ENTER_FILTER_PLAYERS, None)
+
+
+@router.callback_query(F.data.startswith("adm:cfchat:"))
+async def cb_clear_filter_players(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")
+    chat_id, sort = int(parts[2]), parts[3]
+    await state.update_data(players_filter=None, players_filter_chat=None)
+    await state.set_state(None)
+    text, kb = await render_chat(chat_id, 0, sort, None)
+    await _edit(callback, text, kb)
+
+
+@router.message(AdminStates.filter_players)
+async def msg_filter_players(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    chat_id = data.get("filter_chat")
+    sort = data.get("filter_sort", "s")
+    if chat_id is None:
+        await state.clear()
+        return
+    query = (message.text or "").strip()[: texts.MAX_QUERY_LEN]
+    await state.set_state(None)
+    await state.update_data(
+        players_filter=query or None, players_filter_chat=chat_id if query else None
+    )
+    text, kb = await render_chat(chat_id, 0, sort, query or None)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("adm:settings:"))
