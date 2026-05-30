@@ -67,6 +67,7 @@ class Player(Base):
     last_play: Mapped[int] = mapped_column(Integer, default=0)
     disease_id: Mapped[str | None] = mapped_column(String, nullable=True)
     disease_caught_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_chat_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
@@ -82,6 +83,21 @@ class AuditLog(Base):
     target_chat: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     target_user: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class BroadcastLog(Base):
+    """One row per completed broadcast: who sent it, target mode, delivery
+    counts, and a truncated preview of the text — for the history screen."""
+
+    __tablename__ = "broadcast_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    preview: Mapped[str] = mapped_column(Text, default="")
+    target_mode: Mapped[str] = mapped_column(String, default="all")
+    sent: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
 
 
@@ -128,4 +144,18 @@ class ChatThreadStat(Base):
     thread_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     count: Mapped[int] = mapped_column(Integer, default=0)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class ChatSettings(Base):
+    """Per-chat overrides for gameplay knobs. Missing row / NULL field means
+    "use the process-wide default" (env TZ, hardcoded duel params, etc.)."""
+
+    __tablename__ = "chat_settings"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    tz: Mapped[str | None] = mapped_column(String, nullable=True)
+    diseases_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    duel_stake_default: Mapped[int] = mapped_column(Integer, default=5)
+    duel_timeout: Mapped[int] = mapped_column(Integer, default=60)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)

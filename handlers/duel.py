@@ -17,6 +17,8 @@ from models.disease import (
 from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
+from services import cooldown
+from services.settings import get_effective
 import texts
 from texts import (
     CORP_LINES,
@@ -28,8 +30,9 @@ from texts import (
 
 router = Router()
 
-DUEL_TIMEOUT = 60
-DEFAULT_STAKE = 5
+# Hard cap on simultaneous pending challenges from one user per chat, so a user
+# cannot spam the group with challenge messages.
+MAX_PENDING_DUELS = 3
 
 _duels: dict[str, dict] = {}
 # Strong refs to expiry tasks so they aren't garbage-collected mid-flight.
@@ -48,8 +51,10 @@ async def _safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
         await callback.answer(text, show_alert=True)
 
 
-async def _expire_duel(bot: Bot, chat_id: int, message_id: int, token: str) -> None:
-    await asyncio.sleep(DUEL_TIMEOUT)
+async def _expire_duel(
+    bot: Bot, chat_id: int, message_id: int, token: str, timeout: int
+) -> None:
+    await asyncio.sleep(timeout)
     if token not in _duels:
         return
     _duels.pop(token, None)
@@ -170,11 +175,35 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         return
 
     chat_id = message.chat.id
+
+    # Anti-flood: ignore rapid repeat invocations silently.
+    if not cooldown.check_and_touch(chat_id, user.id, "duel", 15):
+        return
+
+    eff = await get_effective(chat_id)
+    duel_timeout = eff.duel_timeout
+    default_stake = eff.duel_stake_default
+
+    # Cap simultaneous pending challenges from this user in this chat.
+    pending = sum(
+        1
+        for d in _duels.values()
+        if d["chat_id"] == chat_id and d["attacker_id"] == user.id
+    )
+    if pending >= MAX_PENDING_DUELS:
+        await message.answer(texts.DUEL_TOO_MANY)
+        return
+
     storage = await get_storage(chat_id)
 
     a_str = str(user.id)
     if a_str not in storage:
         await message.answer(texts.duel_measure_first(_mention(user.id, user.first_name)))
+        return
+
+    if storage[a_str].get("chat_banned"):
+        if cooldown.check_and_touch(chat_id, user.id, "chat_ban_notice", 300):
+            await message.answer(texts.LOCAL_BANNED)
         return
 
     attacker_size = storage[a_str]["size"]
@@ -184,9 +213,9 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     args = command.args
     try:
-        stake = int(args.strip()) if args and args.strip().isdigit() else DEFAULT_STAKE
+        stake = int(args.strip()) if args and args.strip().isdigit() else default_stake
     except ValueError:
-        stake = DEFAULT_STAKE
+        stake = default_stake
 
     stake = max(1, min(stake, attacker_size))
 
@@ -198,7 +227,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         defender_id = 0
 
         text = texts.duel_open_challenge(
-            _mention(user.id, user.first_name), stake, attacker_size, DUEL_TIMEOUT
+            _mention(user.id, user.first_name), stake, attacker_size, duel_timeout
         )
     else:
         defender_id = target.id
@@ -231,7 +260,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
             attacker_size,
             defender_size,
             base_chance,
-            DUEL_TIMEOUT,
+            duel_timeout,
         )
 
     challenge_ts = time.time()
@@ -242,6 +271,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         "chat_id": chat_id,
         "stake": stake,
         "challenge_ts": challenge_ts,
+        "timeout": duel_timeout,
     }
     callback_data = f"duel:{token}"
 
@@ -253,7 +283,9 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
     _duels[token]["message_id"] = sent.message_id
-    task = asyncio.create_task(_expire_duel(bot, chat_id, sent.message_id, token))
+    task = asyncio.create_task(
+        _expire_duel(bot, chat_id, sent.message_id, token, duel_timeout)
+    )
     _expire_tasks.add(task)
     task.add_done_callback(_expire_tasks.discard)
 
@@ -292,7 +324,7 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
 
         now = time.time()
         elapsed = now - data["challenge_ts"]
-        if elapsed > DUEL_TIMEOUT:
+        if elapsed > data["timeout"]:
             _duels.pop(token, None)
             await _safe_edit(callback, texts.DUEL_TIMED_OUT)
             await callback.answer()
@@ -308,6 +340,11 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             if d_str not in storage:
                 data["defender_id"] = 0  # keep the open duel claimable by others
                 await callback.answer(texts.DUEL_ACCEPT_MEASURE_FIRST, show_alert=True)
+                return
+
+            if storage[d_str].get("chat_banned"):
+                data["defender_id"] = 0  # keep the open duel claimable by others
+                await callback.answer(texts.LOCAL_BANNED, show_alert=True)
                 return
 
             defender_size = storage[d_str]["size"]

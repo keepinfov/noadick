@@ -4,11 +4,18 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from services import cooldown
+
 router = Router()
 
 
 @router.message(Command("ping"))
 async def cmd_ping(message: Message, bot: Bot) -> None:
+    user = message.from_user
+    if user is not None and not cooldown.check_and_touch(
+        message.chat.id, user.id, "ping", 10
+    ):
+        return
     processing_start = message.date.astimezone(timezone.utc)
     now_before = datetime.now(timezone.utc)
 

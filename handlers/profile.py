@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 import texts
 from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
+from services import cooldown
 from services import stats as S
 
 router = Router()
@@ -78,6 +79,12 @@ async def _send_global_profile(message: Message, user_id: int, name: str | None)
 
 @router.message(Command("me"))
 async def cmd_me(message: Message, bot: Bot) -> None:
+    requester = message.from_user
+    if requester is not None and not cooldown.check_and_touch(
+        message.chat.id, requester.id, "me", 30
+    ):
+        return
+
     if message.chat.type == "private":
         user = message.from_user
         if not user:

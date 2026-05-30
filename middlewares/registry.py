@@ -19,6 +19,7 @@ from aiogram.types import (
 import texts
 from repositories import chats as chats_repo
 from repositories import threads as threads_repo
+from services import cooldown
 from services.admins import is_global_admin
 from services.registry import chat_hash, relink_legacy
 
@@ -75,7 +76,10 @@ class RegistryMiddleware(BaseMiddleware):
                 if db_user.ban_until is not None and db_user.ban_until < time.time():
                     await chats_repo.set_user_banned(user.id, False)
                 else:
-                    await self._notify_banned(event, db_user)
+                    # Notify at most once per 5 min per user so a banned user
+                    # can't make the bot flood by spamming commands/buttons.
+                    if cooldown.check_and_touch(0, user.id, "ban_notice", 300):
+                        await self._notify_banned(event, db_user)
                     return None
 
         if chat is not None:
@@ -106,17 +110,20 @@ class RegistryMiddleware(BaseMiddleware):
             and not is_global_admin(user.id)
         ):
             if await chats_repo.get_chat(user.id) is None:
-                bot: Bot = data["bot"]
-                link = await self._bot_link(bot)
-                kb = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text=texts.DM_GATE_BUTTON, url=link)]
-                    ]
-                )
-                try:
-                    await event.reply(texts.DM_GATE, reply_markup=kb)
-                except Exception:
-                    pass
+                # Reply at most once per 5 min per user so repeated commands
+                # before opening the DM don't turn into a reply flood.
+                if cooldown.check_and_touch(chat.id, user.id, "dm_gate", 300):
+                    bot: Bot = data["bot"]
+                    link = await self._bot_link(bot)
+                    kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text=texts.DM_GATE_BUTTON, url=link)]
+                        ]
+                    )
+                    try:
+                        await event.reply(texts.DM_GATE, reply_markup=kb)
+                    except Exception:
+                        pass
                 return None
 
         return await handler(event, data)

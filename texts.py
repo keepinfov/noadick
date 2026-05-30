@@ -24,14 +24,16 @@ MAX_QUERY_LEN = 64
 MAX_BAN_REASON_LEN = 200
 
 
-def fmt_datetime(ts: int) -> str:
-    tz = ZoneInfo(key=os.environ.get("TZ", "Europe/Moscow"))
-    return datetime.fromtimestamp(ts, tz).strftime("%d.%m.%Y %H:%M")
+def _zone(tz: str | None) -> ZoneInfo:
+    return ZoneInfo(key=tz or os.environ.get("TZ", "Europe/Moscow"))
 
 
-def fmt_date(ts: int) -> str:
-    tz = ZoneInfo(key=os.environ.get("TZ", "Europe/Moscow"))
-    return datetime.fromtimestamp(ts, tz).strftime("%d.%m.%Y")
+def fmt_datetime(ts: int, tz: str | None = None) -> str:
+    return datetime.fromtimestamp(ts, _zone(tz)).strftime("%d.%m.%Y %H:%M")
+
+
+def fmt_date(ts: int, tz: str | None = None) -> str:
+    return datetime.fromtimestamp(ts, _zone(tz)).strftime("%d.%m.%Y")
 
 
 # --------------------------------------------------------------------- /dick ---
@@ -192,7 +194,10 @@ HELP = (
     "/top — топ-10 по размеру\n"
     "/ping — ping-pong\n"
     "/setbcast — (админам, внутри темы) выбрать тему для рассылок\n"
-    "/unsetbcast — (админам) сбросить тему рассылок"
+    "/unsetbcast — (админам) сбросить тему рассылок\n"
+    "/gameconfig — (админам) настройки чата: tz, болезни, дуэли\n"
+    "/localban, /localunban — (админам) блокировка игрока в этом чате\n"
+    "/resetleaderboard — (админам) обнулить таблицу чата"
 )
 
 HELP_ADMIN = "\n\n/admin — панель глобального администратора (в личке с ботом)"
@@ -217,6 +222,76 @@ DM_GATE = (
     "👋 Чтобы пользоваться ботом, сначала напиши ему в личку "
     "(кнопка ниже, затем /start)."
 )
+
+
+# ------------------------------------------------------- local moderation -------
+
+# Shown to a player blocked locally (per-chat) by a chat admin.
+LOCAL_BANNED = "🚫 Админ чата заблокировал тебя в этой игре."
+
+MOD_NEED_TARGET = (
+    "Ответь командой на сообщение игрока или укажи его числовой id: "
+    "<code>/localban 123456789</code>."
+)
+MOD_TARGET_NOT_FOUND = "Игрок не найден в этом чате."
+
+
+def mod_localban_done(name: str) -> str:
+    return f"🚫 <b>{html.escape(name)}</b> заблокирован в игре этого чата."
+
+
+def mod_localban_already(name: str) -> str:
+    return f"<b>{html.escape(name)}</b> уже заблокирован."
+
+
+def mod_localunban_done(name: str) -> str:
+    return f"✅ <b>{html.escape(name)}</b> снова может играть."
+
+
+def mod_localunban_already(name: str) -> str:
+    return f"<b>{html.escape(name)}</b> и так не заблокирован."
+
+
+def mod_reset_done(count: int) -> str:
+    return f"♻️ Таблица обнулена: сброшено размеров у {count} игроков."
+
+
+# ------------------------------------------------------------- /gameconfig ------
+
+GAMECONFIG_USAGE = (
+    "Настройки чата. Использование:\n"
+    "<code>/gameconfig</code> — показать текущие\n"
+    "<code>/gameconfig &lt;ключ&gt; &lt;значение&gt;</code> — изменить\n\n"
+    "Ключи:\n"
+    "• <code>tz</code> — часовой пояс (например <code>Europe/Moscow</code>)\n"
+    "• <code>diseases</code> — болезни <code>on</code>/<code>off</code>\n"
+    "• <code>duel_stake</code> — ставка дуэли по умолчанию (1–1000)\n"
+    "• <code>duel_timeout</code> — таймаут дуэли в секундах (10–600)"
+)
+
+
+def gameconfig_current(tz: str, diseases: bool, stake: int, timeout: int) -> str:
+    on_off = "on" if diseases else "off"
+    return (
+        "⚙️ Текущие настройки чата:\n"
+        f"• tz: <code>{html.escape(tz)}</code>\n"
+        f"• diseases: <code>{on_off}</code>\n"
+        f"• duel_stake: <code>{stake}</code>\n"
+        f"• duel_timeout: <code>{timeout}</code>"
+    )
+
+
+def gameconfig_set_ok(key: str, value: str) -> str:
+    return f"✅ <code>{html.escape(key)}</code> = <code>{html.escape(value)}</code>"
+
+
+GAMECONFIG_ERRORS = {
+    "unknown_key": "Неизвестный ключ. Доступны: tz, diseases, duel_stake, duel_timeout.",
+    "bad_tz": "Неизвестный часовой пояс. Пример: Europe/Moscow.",
+    "bad_bool": "Ожидается on или off.",
+    "bad_int": "Ожидается целое число.",
+    "out_of_range": "Значение вне допустимого диапазона.",
+}
 
 
 # ---------------------------------------------------------------------- /duel ---
@@ -297,6 +372,7 @@ DUEL_OWN = "Нельзя принять собственный вызов."
 DUEL_TIMED_OUT = "Вызов просрочен. Дуэль отменена."
 DUEL_SELF = "Нельзя вызвать на дуэль самого себя. Это было бы странно."
 DUEL_ACCEPT_BUTTON = "-- ПРИНЯТЬ ВЫЗОВ --"
+DUEL_TOO_MANY = "У тебя слишком много активных вызовов. Дождись их завершения."
 
 
 def duel_measure_first(mention: str) -> str:
@@ -437,6 +513,13 @@ BTN_YES = "✅ Да"
 BTN_CANCEL = "❌ Отмена"
 BTN_OWN_REASON = "✏️ Своя причина"
 
+BTN_BCAST_HISTORY = "🗂 История рассылок"
+BTN_UNBAN_USER = "✅ Разбан юзера"
+BTN_MODE_ALL = "🌐 Все чаты"
+BTN_MODE_GROUPS = "👥 Только группы"
+BTN_MODE_DM = "✉️ Только личка"
+BTN_MODE_ACTIVE = "🔥 Только активные"
+
 BTN_RESET_CHAT = "🧨 Сброс чата"
 BTN_UNBAN = "✅ Разбан"
 BTN_BAN_CHAT = "🚫 Бан чата"
@@ -483,10 +566,25 @@ ADMIN_REASON_EMPTY = "Пустая причина. Отменено."
 ADMIN_ENTER_FIND = "Введи ID игрока или часть имени:"
 ADMIN_FIND_EMPTY = "Пустой запрос. Отменено."
 ADMIN_FIND_NONE = "Ничего не найдено."
-ADMIN_ENTER_BCAST = "Введи текст рассылки (HTML). Будет отправлено во все чаты:"
+ADMIN_FIND_LOST = "Запрос поиска потерян. Повтори поиск через меню."
+ADMIN_ENTER_BCAST = "Введи текст рассылки (HTML). Дальше выберешь, кому отправить:"
 ADMIN_BCAST_EMPTY = "Пустой текст. Отменено."
 ADMIN_BCAST_LOST = "Текст рассылки потерян. Отменено."
 ADMIN_BCAST_STARTED = "📢 Рассылка началась…"
+ADMIN_PICK_BCAST_MODE = "📢 Кому отправить рассылку?"
+ADMIN_BCAST_NO_HISTORY = "Рассылок ещё не было."
+
+# Broadcast target mode -> human label.
+BCAST_MODE_LABELS: dict[str, str] = {
+    "all": "все чаты",
+    "groups": "только группы",
+    "dm": "только личка",
+    "active": "только активные",
+}
+
+# Broadcast knobs (centralized so handlers/repos share one source of truth).
+MAX_BCAST_PREVIEW_LEN = 200
+BCAST_HISTORY_PER_PAGE = 8
 ADMIN_BCAST_AUTO_TOPIC = (
     "ℹ️ Тема для рассылок не задана — сообщения идут в самую активную тему. "
     "Чтобы выбрать тему, отправьте в ней /setbcast."
@@ -546,18 +644,58 @@ def admin_find_result_line(name: str, size: int, chat_id: int) -> str:
     return f"{name} — {size} см (чат {chat_id})"
 
 
-def admin_bcast_preview(text: str) -> str:
-    return f"📢 Предпросмотр рассылки:\n\n{text}\n\nОтправить во все чаты?"
+def bcast_mode_label(mode: str) -> str:
+    return BCAST_MODE_LABELS.get(mode, BCAST_MODE_LABELS["all"])
+
+
+def admin_bcast_mode_preview(text: str, mode_label: str, target_count: int) -> str:
+    return (
+        f"📢 Предпросмотр рассылки:\n\n{text}\n\n"
+        f"Кому: <b>{html.escape(mode_label)}</b> — получателей: {target_count}.\n"
+        "Отправить?"
+    )
 
 
 def admin_bcast_done(sent: int, failed: int) -> str:
     return f"📢 Рассылка завершена. Успешно: {sent}, ошибок: {failed}."
 
 
-def admin_global_stats(chats: int, users: int, players: int, total_size: int) -> str:
+def admin_bcast_history_page(total: int, page: int) -> str:
+    return f"🗂 Всего рассылок: {total}. Страница {page + 1}."
+
+
+def admin_bcast_history_line(
+    created_at: int, mode: str, sent: int, failed: int, preview: str
+) -> str:
+    snippet = html.escape(preview)
+    return (
+        f"🕒 {fmt_datetime(created_at)} | {bcast_mode_label(mode)} | "
+        f"✅ {sent} / ❌ {failed}\n{snippet}"
+    )
+
+
+def admin_chat_label(
+    c_type: str, title: str, first_name: str | None, username: str | None, chat_id: int
+) -> str:
+    """Human label for a chat in lists. For private chats, prefer the owner's
+    name/username over the bare id; groups use their title."""
+    if c_type == "private":
+        if first_name:
+            if username:
+                return f"{first_name} (@{username})"
+            return first_name
+        if username:
+            return f"@{username}"
+        return f"DM {chat_id}"
+    return title or str(chat_id)
+
+
+def admin_global_stats(
+    chats: int, users: int, players: int, total_size: int, active: int
+) -> str:
     return (
         "📊 <b>Глобальная статистика</b>\n"
-        f"Чатов: {chats}\n"
+        f"Чатов: {chats} (активных: {active})\n"
         f"Пользователей: {users}\n"
         f"Игроков (записей): {players}\n"
         f"Суммарный размер: {total_size} см"

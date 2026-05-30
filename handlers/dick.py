@@ -1,7 +1,5 @@
 import html
-import os
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from aiogram import Router
 from aiogram.filters import Command
@@ -22,13 +20,11 @@ from repositories.players import (
     get_storage,
     save_storage,
 )
+from services import cooldown
 from services.game import roll_delta
+from services.settings import get_effective, resolve_tz
 
 router = Router()
-
-
-def _get_tz() -> ZoneInfo:
-    return ZoneInfo(key=os.environ.get("TZ", "Europe/Moscow"))
 
 
 def _rank(storage: Storage, user_id: int) -> int:
@@ -60,12 +56,18 @@ async def cmd_dick(message: Message) -> None:
 
     user_id = user.id
     chat_id = message.chat.id
-    tz = _get_tz()
+    eff = await get_effective(chat_id)
+    tz = await resolve_tz(chat_id)
     now = datetime.now(tz)
     uid_str = str(user_id)
 
     async with get_chat_lock(chat_id):
         storage = await get_storage(chat_id)
+
+        if uid_str in storage and storage[uid_str].get("chat_banned"):
+            if cooldown.check_and_touch(chat_id, user_id, "chat_ban_notice", 300):
+                await message.answer(texts.LOCAL_BANNED)
+            return
 
         changed = False
         for pid in list(storage.keys()):
@@ -76,6 +78,12 @@ async def cmd_dick(message: Message) -> None:
             owner = storage[uid_str]
             last_dt = datetime.fromtimestamp(owner["last"], tz=tz)
             if last_dt.date() == now.date():
+                if changed:
+                    await save_storage(chat_id, storage)
+                # Repeated /dick after today's play: answer at most once per
+                # minute so the command can't be used to flood the chat.
+                if not cooldown.check_and_touch(chat_id, user_id, "dick_repeat", 60):
+                    return
                 mention = _mention(user_id, user.first_name)
                 rank = _rank(storage, user_id)
                 remaining = _time_until_midnight(now)
@@ -83,8 +91,6 @@ async def cmd_dick(message: Message) -> None:
                 text = texts.dick_already_today(mention, owner["size"], rank, remaining)
                 if dtag:
                     text += f"\n{dtag}"
-                if changed:
-                    await save_storage(chat_id, storage)
                 await message.answer(text, parse_mode="HTML")
                 return
 
@@ -101,7 +107,7 @@ async def cmd_dick(message: Message) -> None:
         player["name"] = user.first_name
         storage[uid_str] = player
 
-        infection = roll_infection()
+        infection = roll_infection(eff.diseases_enabled)
         disease_msg = ""
         if infection:
             player["disease"] = {"id": infection.id, "caught_at": int(now.timestamp())}

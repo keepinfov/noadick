@@ -20,6 +20,9 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "banned_at": "INTEGER",
         "ban_until": "INTEGER",
     },
+    "players": {
+        "is_chat_banned": "INTEGER",
+    },
 }
 
 _engine: AsyncEngine | None = None

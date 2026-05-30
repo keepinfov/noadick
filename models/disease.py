@@ -61,7 +61,9 @@ DISEASES = [
 DISEASE_BY_ID = {d.id: d for d in DISEASES}
 
 
-def roll_infection() -> Disease | None:
+def roll_infection(enabled: bool = True) -> Disease | None:
+    if not enabled:
+        return None
     if random.random() < DISEASE_CHANCE:
         return random.choice(DISEASES)
     return None

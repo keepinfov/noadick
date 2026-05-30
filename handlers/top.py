@@ -5,6 +5,7 @@ from aiogram.types import Message
 import texts
 from models.disease import check_expire, disease_tag
 from repositories.players import get_chat_lock, get_storage, save_storage
+from services import cooldown
 
 router = Router()
 
@@ -12,6 +13,10 @@ router = Router()
 @router.message(Command("top"))
 async def cmd_top(message: Message) -> None:
     chat_id = message.chat.id
+
+    user = message.from_user
+    if user is not None and not cooldown.check_and_touch(chat_id, user.id, "top", 30):
+        return
 
     async with get_chat_lock(chat_id):
         storage = await get_storage(chat_id)

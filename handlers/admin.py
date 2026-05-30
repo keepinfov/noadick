@@ -23,6 +23,7 @@ from aiogram.types import (
 
 import texts
 from models.disease import DISEASES, disease_tag
+from repositories import broadcasts as broadcasts_repo
 from repositories import chats as chats_repo
 from repositories import players as players_repo
 from repositories import threads as threads_repo
@@ -33,6 +34,8 @@ router = Router()
 
 CHATS_PER_PAGE = 8
 PLAYERS_PER_CHAT = 15
+FIND_PER_PAGE = 8
+BCAST_MODES = ("all", "groups", "dm", "active")
 
 
 class IsGlobalAdmin(BaseFilter):
@@ -85,21 +88,39 @@ def main_menu_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=texts.BTN_STATS, callback_data="adm:stats"),
                 InlineKeyboardButton(text=texts.BTN_BCAST, callback_data="adm:bcast"),
             ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_BCAST_HISTORY, callback_data="adm:bhist:0"
+                ),
+            ],
         ]
     )
+
+
+def _back_row(parent_data: str) -> list[InlineKeyboardButton]:
+    """A single-button row that navigates back to a parent screen. Parent
+    context is encoded in the existing adm:* callback, so Back works even after
+    FSM state is cleared or an old message is reopened."""
+    return [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=parent_data)]
 
 
 async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
     total = await chats_repo.count_chats()
     offset = page * CHATS_PER_PAGE
-    chats = await chats_repo.list_chats(offset=offset, limit=CHATS_PER_PAGE)
+    chats = await chats_repo.list_chats_with_owner(offset=offset, limit=CHATS_PER_PAGE)
 
     rows: list[list[InlineKeyboardButton]] = []
-    for c in chats:
-        title = c.title or (f"private {c.chat_id}" if c.type == "private" else str(c.chat_id))
+    for c, owner in chats:
+        label = texts.admin_chat_label(
+            c.type,
+            c.title,
+            owner.first_name if owner else None,
+            owner.username if owner else None,
+            c.chat_id,
+        )
         flag = "🚫 " if c.is_banned else ""
         rows.append(
-            [InlineKeyboardButton(text=f"{flag}{title}", callback_data=f"adm:chat:{c.chat_id}")]
+            [InlineKeyboardButton(text=f"{flag}{label}", callback_data=f"adm:chat:{c.chat_id}")]
         )
 
     nav: list[InlineKeyboardButton] = []
@@ -115,16 +136,27 @@ async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def render_chat(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     chat = await chats_repo.get_chat(chat_id)
     stats = await players_repo.chat_player_stats(chat_id)
-    players = await players_repo.top_players(chat_id, PLAYERS_PER_CHAT)
+    total_players = stats['players']
+    offset = page * PLAYERS_PER_CHAT
+    players = await players_repo.list_players_page(chat_id, offset, PLAYERS_PER_CHAT)
 
-    title = (chat.title if chat and chat.title else str(chat_id))
+    if chat and chat.type == "private":
+        owner = await chats_repo.get_user(chat_id)
+        title = texts.admin_chat_label(
+            chat.type, chat.title,
+            owner.first_name if owner else None,
+            owner.username if owner else None,
+            chat_id,
+        )
+    else:
+        title = (chat.title if chat and chat.title else str(chat_id))
     banned = chat and chat.is_banned
     lines = [
         texts.admin_chat_header(title, chat_id),
-        texts.admin_chat_stats(stats['players'], stats['total_size'], stats['biggest']),
+        texts.admin_chat_stats(total_players, stats['total_size'], stats['biggest']),
         "",
     ]
     rows: list[list[InlineKeyboardButton]] = []
@@ -139,6 +171,18 @@ async def render_chat(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         )
     if not players:
         lines.append(texts.ADMIN_NO_PLAYERS)
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:chat:{chat_id}:{page - 1}")
+        )
+    if offset + PLAYERS_PER_CHAT < total_players:
+        nav.append(
+            InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:chat:{chat_id}:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
 
     rows.append(
         [
@@ -165,6 +209,14 @@ async def render_player(chat_id: int, user_id: int) -> tuple[str, InlineKeyboard
     tag = disease_tag(_player_dict(p))
     text = texts.admin_player_header(p.name, tag, user_id, username, p.size, chat_id)
     base = f"{chat_id}:{user_id}"
+    if user and user.is_banned:
+        ban_btn = InlineKeyboardButton(
+            text=texts.BTN_UNBAN_USER, callback_data=f"adm:uuser:{chat_id}:{user_id}"
+        )
+    else:
+        ban_btn = InlineKeyboardButton(
+            text=texts.BTN_BAN_USER, callback_data=f"adm:buser:{chat_id}:{user_id}"
+        )
     rows = [
         [
             InlineKeyboardButton(text="-10", callback_data=f"adm:add:{base}:-10"),
@@ -185,7 +237,7 @@ async def render_player(chat_id: int, user_id: int) -> tuple[str, InlineKeyboard
             InlineKeyboardButton(text=texts.BTN_DELETE_PLAYER, callback_data=f"adm:del:{base}"),
         ],
         [
-            InlineKeyboardButton(text=texts.BTN_BAN_USER, callback_data=f"adm:buser:{chat_id}:{user_id}"),
+            ban_btn,
             InlineKeyboardButton(text=texts.BTN_BACK_CHAT, callback_data=f"adm:chat:{chat_id}"),
         ],
     ]
@@ -321,8 +373,10 @@ async def cb_chats(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adm:chat:"))
 async def cb_chat(callback: CallbackQuery) -> None:
-    chat_id = int(callback.data.split(":")[2])
-    text, kb = await render_chat(chat_id)
+    parts = callback.data.split(":")
+    chat_id = int(parts[2])
+    page = int(parts[3]) if len(parts) > 3 else 0
+    text, kb = await render_chat(chat_id, page)
     await _edit(callback, text, kb)
 
 
@@ -547,6 +601,15 @@ async def msg_ban_reason(message: Message, state: FSMContext, bot: Bot) -> None:
         )
 
 
+@router.callback_query(F.data.startswith("adm:uuser:"))
+async def cb_unban_user(callback: CallbackQuery) -> None:
+    _, _, chat_id, user_id = callback.data.split(":")
+    res = await admin_actions.unban_user(callback.from_user.id, int(user_id))
+    text, kb = await render_player(int(chat_id), int(user_id))
+    await _edit(callback, text, kb)
+    await callback.answer(res.message, show_alert=True)
+
+
 @router.callback_query(F.data.startswith("adm:uchat:"))
 async def cb_unban_chat(callback: CallbackQuery) -> None:
     chat_id = int(callback.data.split(":")[2])
@@ -572,7 +635,10 @@ async def cb_disease_set(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "adm:stats")
 async def cb_stats(callback: CallbackQuery) -> None:
     s = await chats_repo.global_stats()
-    text = texts.admin_global_stats(s['chats'], s['users'], s['players'], s['total_size'])
+    active = await chats_repo.active_chat_count()
+    text = texts.admin_global_stats(
+        s['chats'], s['users'], s['players'], s['total_size'], active
+    )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
     )
@@ -632,17 +698,14 @@ async def cb_find(callback: CallbackQuery, state: FSMContext) -> None:
     await _edit(callback, texts.ADMIN_ENTER_FIND, None)
 
 
-@router.message(AdminStates.find_query)
-async def msg_find(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    query = (message.text or "").strip()[: texts.MAX_QUERY_LEN]
-    if not query:
-        await message.answer(texts.ADMIN_FIND_EMPTY, reply_markup=main_menu_kb())
-        return
+async def render_find(query: str, page: int) -> tuple[str, InlineKeyboardMarkup] | None:
+    """Build a paginated find-results screen, or None when nothing matches."""
     results = await players_repo.find_players(query)
     if not results:
-        await message.answer(texts.ADMIN_FIND_NONE, reply_markup=main_menu_kb())
-        return
+        return None
+    total = len(results)
+    offset = page * FIND_PER_PAGE
+    window = results[offset : offset + FIND_PER_PAGE]
     rows = [
         [
             InlineKeyboardButton(
@@ -650,19 +713,70 @@ async def msg_find(message: Message, state: FSMContext) -> None:
                 callback_data=f"adm:p:{p.chat_id}:{p.user_id}",
             )
         ]
-        for p in results
+        for p in window
     ]
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:fp:{page - 1}"))
+    if offset + FIND_PER_PAGE < total:
+        nav.append(InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:fp:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
-    await message.answer(
-        texts.admin_find_found(len(results)),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    return texts.admin_find_found(total), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.message(AdminStates.find_query)
+async def msg_find(message: Message, state: FSMContext) -> None:
+    query = (message.text or "").strip()[: texts.MAX_QUERY_LEN]
+    if not query:
+        await state.clear()
+        await message.answer(texts.ADMIN_FIND_EMPTY, reply_markup=main_menu_kb())
+        return
+    rendered = await render_find(query, 0)
+    if rendered is None:
+        await state.clear()
+        await message.answer(texts.ADMIN_FIND_NONE, reply_markup=main_menu_kb())
+        return
+    # Keep the query in FSM data (without an active input state) so page nav can
+    # re-run the search. If state is later cleared, nav falls back gracefully.
+    await state.set_state(None)
+    await state.update_data(find_query_text=query)
+    text, kb = rendered
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("adm:fp:"))
+async def cb_find_page(callback: CallbackQuery, state: FSMContext) -> None:
+    page = int(callback.data.split(":")[2])
+    query = (await state.get_data()).get("find_query_text")
+    if not query:
+        await _edit(callback, texts.ADMIN_FIND_LOST, main_menu_kb())
+        return
+    rendered = await render_find(query, page)
+    if rendered is None:
+        await _edit(callback, texts.ADMIN_FIND_NONE, main_menu_kb())
+        return
+    text, kb = rendered
+    await _edit(callback, text, kb)
 
 
 @router.callback_query(F.data == "adm:bcast")
 async def cb_bcast(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.broadcast_text)
     await _edit(callback, texts.ADMIN_ENTER_BCAST, None)
+
+
+def _bcast_mode_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=texts.BTN_MODE_ALL, callback_data="adm:bmode:all")],
+            [InlineKeyboardButton(text=texts.BTN_MODE_GROUPS, callback_data="adm:bmode:groups")],
+            [InlineKeyboardButton(text=texts.BTN_MODE_DM, callback_data="adm:bmode:dm")],
+            [InlineKeyboardButton(text=texts.BTN_MODE_ACTIVE, callback_data="adm:bmode:active")],
+            [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="adm:home")],
+        ]
+    )
 
 
 @router.message(AdminStates.broadcast_text)
@@ -674,10 +788,34 @@ async def msg_bcast(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(bcast_text=text)
     await state.set_state(AdminStates.broadcast_confirm)
-    await message.answer(
-        texts.admin_bcast_preview(text),
-        reply_markup=_confirm_kb("adm:yes:bcast", "adm:home"),
-        parse_mode="HTML",
+    await message.answer(texts.ADMIN_PICK_BCAST_MODE, reply_markup=_bcast_mode_kb())
+
+
+@router.callback_query(F.data == "adm:bpick")
+async def cb_bcast_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    text = (await state.get_data()).get("bcast_text")
+    if not text:
+        await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
+        return
+    await _edit(callback, texts.ADMIN_PICK_BCAST_MODE, _bcast_mode_kb())
+
+
+@router.callback_query(F.data.startswith("adm:bmode:"))
+async def cb_bcast_mode(callback: CallbackQuery, state: FSMContext) -> None:
+    mode = callback.data.split(":")[2]
+    if mode not in BCAST_MODES:
+        mode = "all"
+    data = await state.get_data()
+    text = data.get("bcast_text")
+    if not text:
+        await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
+        return
+    await state.update_data(bcast_mode=mode)
+    targets = await admin_actions.broadcast_targets(mode)
+    await _edit(
+        callback,
+        texts.admin_bcast_mode_preview(text, texts.bcast_mode_label(mode), len(targets)),
+        _confirm_kb("adm:yes:bcast", "adm:bpick"),
     )
 
 
@@ -709,10 +847,11 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
     if not text:
         await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
         return
+    mode = data.get("bcast_mode", "all")
     if callback.message is not None:
         await callback.message.edit_text(texts.ADMIN_BCAST_STARTED)
     await callback.answer()
-    targets = await admin_actions.broadcast_targets()
+    targets = await admin_actions.broadcast_targets(mode)
     sent = 0
     failed = 0
     for chat_id in targets:
@@ -725,8 +864,48 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
         if ok and reason == "auto":
             await _bcast_send(bot, chat_id, texts.ADMIN_BCAST_AUTO_TOPIC, thread_id)
         await asyncio.sleep(BCAST_RATE_DELAY)
+    await admin_actions.log_broadcast(
+        callback.from_user.id, text[: texts.MAX_BCAST_PREVIEW_LEN], mode, sent, failed
+    )
     if callback.message is not None:
         await callback.message.answer(
             texts.admin_bcast_done(sent, failed),
             reply_markup=main_menu_kb(),
         )
+
+
+BCAST_HISTORY_PER_PAGE = texts.BCAST_HISTORY_PER_PAGE
+
+
+async def render_bcast_history(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    total = await broadcasts_repo.count_broadcasts()
+    offset = page * BCAST_HISTORY_PER_PAGE
+    rows_db = await broadcasts_repo.list_broadcasts(offset=offset, limit=BCAST_HISTORY_PER_PAGE)
+
+    lines = [texts.admin_bcast_history_page(total, page), ""]
+    if rows_db:
+        lines.extend(
+            texts.admin_bcast_history_line(b.created_at, b.target_mode, b.sent, b.failed, b.preview)
+            for b in rows_db
+        )
+    else:
+        lines.append(texts.ADMIN_BCAST_NO_HISTORY)
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:bhist:{page - 1}"))
+    if offset + BCAST_HISTORY_PER_PAGE < total:
+        nav.append(InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:bhist:{page + 1}"))
+    kb_rows: list[list[InlineKeyboardButton]] = []
+    if nav:
+        kb_rows.append(nav)
+    kb_rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+@router.callback_query(F.data.startswith("adm:bhist:"))
+async def cb_bcast_history(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    page = int(callback.data.split(":")[2])
+    text, kb = await render_bcast_history(page)
+    await _edit(callback, text, kb)

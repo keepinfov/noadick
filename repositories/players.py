@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from db.engine import get_session_factory
 from db.models import Chat, Player
@@ -28,7 +28,12 @@ Storage = dict[str, PlayerDict]
 
 
 def player_to_dict(p: Player) -> PlayerDict:
-    d: PlayerDict = {"name": p.name, "size": p.size, "last": p.last_play}
+    d: PlayerDict = {
+        "name": p.name,
+        "size": p.size,
+        "last": p.last_play,
+        "chat_banned": bool(p.is_chat_banned),
+    }
     if p.disease_id:
         d["disease"] = {"id": p.disease_id, "caught_at": p.disease_caught_at}
     return d
@@ -38,6 +43,8 @@ def _apply_dict_to_player(p: Player, data: PlayerDict) -> None:
     p.name = data.get("name", p.name)
     p.size = int(data.get("size", p.size))
     p.last_play = int(data.get("last", p.last_play))
+    if "chat_banned" in data:
+        p.is_chat_banned = bool(data["chat_banned"])
     disease = data.get("disease")
     if disease:
         p.disease_id = disease.get("id")
@@ -113,6 +120,33 @@ async def top_players(chat_id: int, limit: int = 10) -> list[Player]:
     return (await list_players(chat_id))[:limit]
 
 
+async def list_players_page(
+    chat_id: int, offset: int, limit: int
+) -> list[Player]:
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(Player)
+                .where(Player.chat_id == chat_id)
+                .order_by(Player.size.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars().all()
+        return list(rows)
+
+
+async def count_players(chat_id: int) -> int:
+    factory = get_session_factory()
+    async with factory() as session:
+        return (
+            await session.execute(
+                select(func.count(Player.user_id)).where(Player.chat_id == chat_id)
+            )
+        ).scalar_one()
+
+
 async def get_rank(chat_id: int, user_id: int) -> int:
     players = await list_players(chat_id)
     for i, p in enumerate(players):
@@ -152,6 +186,18 @@ async def reset_chat_players(chat_id: int) -> int:
     async with factory() as session:
         result = await session.execute(
             delete(Player).where(Player.chat_id == chat_id)
+        )
+        await session.commit()
+        return result.rowcount or 0
+
+
+async def zero_chat_sizes(chat_id: int) -> int:
+    """Reset every player's size to 0 in a chat (keeps rows, e.g. local bans).
+    Returns the number of players affected."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            update(Player).where(Player.chat_id == chat_id).values(size=0)
         )
         await session.commit()
         return result.rowcount or 0

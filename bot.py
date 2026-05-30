@@ -10,7 +10,7 @@ from aiogram.types import BotCommand, ErrorEvent
 from dotenv import load_dotenv
 
 from db.engine import dispose_engine, init_db
-from handlers import admin, dick, duel, help, ping, profile, settings, top
+from handlers import admin, dick, duel, help, modtools, ping, profile, settings, top
 from middlewares.registry import RegistryMiddleware
 
 
@@ -51,8 +51,8 @@ async def main() -> None:
         return True
 
     dp.include_routers(
-        admin.router, settings.router, dick.router, duel.router, profile.router,
-        top.router, help.router, ping.router,
+        admin.router, settings.router, modtools.router, dick.router, duel.router,
+        profile.router, top.router, help.router, ping.router,
     )
 
     await bot.set_my_commands([

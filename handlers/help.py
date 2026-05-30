@@ -4,6 +4,7 @@ from aiogram.types import Message
 
 import texts
 from handlers.profile import _send_global_profile
+from services import cooldown
 from services.admins import is_global_admin
 
 router = Router()
@@ -19,7 +20,12 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
+    user = message.from_user
+    if user is not None and not cooldown.check_and_touch(
+        message.chat.id, user.id, "help", 30
+    ):
+        return
     text = texts.HELP
-    if message.from_user and is_global_admin(message.from_user.id):
+    if user and is_global_admin(user.id):
         text += texts.HELP_ADMIN
     await message.answer(text)

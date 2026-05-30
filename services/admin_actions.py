@@ -12,6 +12,7 @@ import texts
 from db.engine import get_session_factory
 from db.models import AuditLog
 from models.disease import DISEASE_BY_ID
+from repositories import broadcasts as broadcasts_repo
 from repositories import chats as chats_repo
 from repositories import events as E
 from repositories import players as players_repo
@@ -200,7 +201,20 @@ async def unban_chat(actor_id: int, chat_id: int) -> ActionResult:
     return ActionResult(ok, texts.res_chat_unbanned(chat_id) if ok else texts.RES_CHAT_NOT_FOUND)
 
 
-async def broadcast_targets() -> list[int]:
-    """Chat ids for a broadcast (excludes banned chats). Sending is done by the
-    caller, which has access to the bot instance."""
-    return await chats_repo.all_chat_ids(include_banned=False)
+async def broadcast_targets(mode: str = "all") -> list[int]:
+    """Chat ids for a broadcast, filtered by target mode (excludes banned chats).
+    Sending is done by the caller, which has access to the bot instance."""
+    return await chats_repo.chat_ids_by_mode(mode)
+
+
+async def log_broadcast(
+    actor_id: int, preview: str, target_mode: str, sent: int, failed: int
+) -> None:
+    """Persist a completed broadcast for the history screen (+ audit)."""
+    await broadcasts_repo.insert_broadcast(
+        actor_id, preview, target_mode, sent, failed
+    )
+    await _audit(
+        actor_id, "broadcast",
+        payload={"mode": target_mode, "sent": sent, "failed": failed},
+    )
