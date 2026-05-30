@@ -248,6 +248,33 @@ async def find_players(query: str, limit: int = 25) -> list[Player]:
         return list(rows)
 
 
+def _find_filter(stmt, query: str):
+    """Shared WHERE for find: numeric query matches user_id, else name substring."""
+    if query.isdigit():
+        return stmt.where(Player.user_id == int(query))
+    return stmt.where(Player.name.ilike(f"%{query}%"))
+
+
+async def find_players_page(query: str, offset: int, limit: int) -> list[Player]:
+    """One page of find results (same filter as find_players, size-ordered)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = _find_filter(select(Player), query)
+        rows = (
+            await session.execute(
+                stmt.order_by(Player.size.desc()).offset(offset).limit(limit)
+            )
+        ).scalars().all()
+        return list(rows)
+
+
+async def count_find_players(query: str) -> int:
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = _find_filter(select(func.count(Player.user_id)), query)
+        return (await session.execute(stmt)).scalar_one()
+
+
 async def chat_player_stats(chat_id: int) -> dict:
     factory = get_session_factory()
     async with factory() as session:

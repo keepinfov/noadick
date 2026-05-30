@@ -652,7 +652,6 @@ BCAST_MODE_LABELS: dict[str, str] = {
 
 # Broadcast knobs (centralized so handlers/repos share one source of truth).
 MAX_BCAST_PREVIEW_LEN = 200
-BCAST_HISTORY_PER_PAGE = 8
 ADMIN_BCAST_AUTO_TOPIC = (
     "ℹ️ Тема для рассылок не задана — сообщения идут в самую активную тему. "
     "Чтобы выбрать тему, отправьте в ней /setbcast."

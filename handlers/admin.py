@@ -36,9 +36,6 @@ from services.global_settings import get_config
 
 router = Router()
 
-CHATS_PER_PAGE = 8
-PLAYERS_PER_CHAT = 15
-FIND_PER_PAGE = 8
 BCAST_MODES = ("all", "groups", "dm", "active")
 
 
@@ -137,9 +134,10 @@ def _pager(prefix: str, page: int, total: int, per_page: int) -> list[InlineKeyb
 
 
 async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    per_page = (await get_config()).page_size
     total = await chats_repo.count_chats()
-    offset = page * CHATS_PER_PAGE
-    chats = await chats_repo.list_chats_with_owner(offset=offset, limit=CHATS_PER_PAGE)
+    offset = page * per_page
+    chats = await chats_repo.list_chats_with_owner(offset=offset, limit=per_page)
 
     rows: list[list[InlineKeyboardButton]] = []
     for c, owner in chats:
@@ -155,7 +153,7 @@ async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
             [InlineKeyboardButton(text=f"{flag}{label}", callback_data=f"adm:chat:{c.chat_id}")]
         )
 
-    nav = _pager("adm:chats", page, total, CHATS_PER_PAGE)
+    nav = _pager("adm:chats", page, total, per_page)
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
@@ -165,11 +163,12 @@ async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
 
 
 async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    per_page = (await get_config()).page_size
     chat = await chats_repo.get_chat(chat_id)
     stats = await players_repo.chat_player_stats(chat_id)
     total_players = stats['players']
-    offset = page * PLAYERS_PER_CHAT
-    players = await players_repo.list_players_page(chat_id, offset, PLAYERS_PER_CHAT)
+    offset = page * per_page
+    players = await players_repo.list_players_page(chat_id, offset, per_page)
 
     if chat and chat.type == "private":
         owner = await chats_repo.get_user(chat_id)
@@ -200,7 +199,7 @@ async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
     if not players:
         lines.append(texts.ADMIN_NO_PLAYERS)
 
-    nav = _pager(f"adm:chat:{chat_id}", page, total_players, PLAYERS_PER_CHAT)
+    nav = _pager(f"adm:chat:{chat_id}", page, total_players, per_page)
     if nav:
         rows.append(nav)
 
@@ -425,9 +424,10 @@ async def cb_chat_settings(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def render_local_bans(chat_id: int, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    per_page = (await get_config()).page_size
     total = await players_repo.count_chat_banned(chat_id)
-    offset = page * PLAYERS_PER_CHAT
-    banned = await players_repo.list_chat_banned(chat_id, offset, PLAYERS_PER_CHAT)
+    offset = page * per_page
+    banned = await players_repo.list_chat_banned(chat_id, offset, per_page)
 
     lines = [texts.admin_local_bans_page(total, page)]
     rows: list[list[InlineKeyboardButton]] = []
@@ -444,7 +444,7 @@ async def render_local_bans(chat_id: int, page: int) -> tuple[str, InlineKeyboar
         lines.append("")
         lines.append(texts.ADMIN_NO_LOCAL_BANS)
 
-    nav = _pager(f"adm:lban:{chat_id}", page, total, PLAYERS_PER_CHAT)
+    nav = _pager(f"adm:lban:{chat_id}", page, total, per_page)
     if nav:
         rows.append(nav)
     rows.append(
@@ -837,13 +837,14 @@ async def cb_find(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def render_find(query: str, page: int) -> tuple[str, InlineKeyboardMarkup] | None:
-    """Build a paginated find-results screen, or None when nothing matches."""
-    results = await players_repo.find_players(query)
-    if not results:
+    """Build a paginated find-results screen, or None when nothing matches.
+    Paginated in the DB so results beyond the first page are reachable."""
+    total = await players_repo.count_find_players(query)
+    if total == 0:
         return None
-    total = len(results)
-    offset = page * FIND_PER_PAGE
-    window = results[offset : offset + FIND_PER_PAGE]
+    per_page = (await get_config()).page_size
+    offset = page * per_page
+    window = await players_repo.find_players_page(query, offset, per_page)
     rows = [
         [
             InlineKeyboardButton(
@@ -853,7 +854,7 @@ async def render_find(query: str, page: int) -> tuple[str, InlineKeyboardMarkup]
         ]
         for p in window
     ]
-    nav = _pager("adm:fp", page, total, FIND_PER_PAGE)
+    nav = _pager("adm:fp", page, total, per_page)
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
@@ -1009,13 +1010,11 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
         )
 
 
-BCAST_HISTORY_PER_PAGE = texts.BCAST_HISTORY_PER_PAGE
-
-
 async def render_bcast_history(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    per_page = (await get_config()).page_size
     total = await broadcasts_repo.count_broadcasts()
-    offset = page * BCAST_HISTORY_PER_PAGE
-    rows_db = await broadcasts_repo.list_broadcasts(offset=offset, limit=BCAST_HISTORY_PER_PAGE)
+    offset = page * per_page
+    rows_db = await broadcasts_repo.list_broadcasts(offset=offset, limit=per_page)
 
     lines = [texts.admin_bcast_history_page(total, page), ""]
     if rows_db:
@@ -1026,7 +1025,7 @@ async def render_bcast_history(page: int) -> tuple[str, InlineKeyboardMarkup]:
     else:
         lines.append(texts.ADMIN_BCAST_NO_HISTORY)
 
-    nav = _pager("adm:bhist", page, total, BCAST_HISTORY_PER_PAGE)
+    nav = _pager("adm:bhist", page, total, per_page)
     kb_rows: list[list[InlineKeyboardButton]] = []
     if nav:
         kb_rows.append(nav)
