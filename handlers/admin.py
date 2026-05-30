@@ -7,6 +7,7 @@ the ADMIN_IDS environment variable (comma-separated).
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 
 from aiogram import Bot, F, Router
@@ -104,6 +105,29 @@ def _back_row(parent_data: str) -> list[InlineKeyboardButton]:
     return [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=parent_data)]
 
 
+def _pager(prefix: str, page: int, total: int, per_page: int) -> list[InlineKeyboardButton]:
+    """One nav row: ⏮ « X/Y » ⏭. `prefix` already carries any sort/filter
+    context; the target page is appended as the trailing segment. The middle
+    indicator is inert (adm:noop). Returns [] when there is only one page."""
+    pages = max(1, math.ceil(total / per_page)) if per_page > 0 else 1
+    if pages <= 1:
+        return []
+    page = max(0, min(page, pages - 1))
+    row: list[InlineKeyboardButton] = []
+    if page > 0:
+        row.append(InlineKeyboardButton(text=texts.BTN_FIRST, callback_data=f"{prefix}:0"))
+        row.append(InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"{prefix}:{page - 1}"))
+    row.append(
+        InlineKeyboardButton(
+            text=texts.pager_indicator(page, pages, total), callback_data="adm:noop"
+        )
+    )
+    if page < pages - 1:
+        row.append(InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"{prefix}:{page + 1}"))
+        row.append(InlineKeyboardButton(text=texts.BTN_LAST, callback_data=f"{prefix}:{pages - 1}"))
+    return row
+
+
 async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
     total = await chats_repo.count_chats()
     offset = page * CHATS_PER_PAGE
@@ -123,11 +147,7 @@ async def render_chats(page: int) -> tuple[str, InlineKeyboardMarkup]:
             [InlineKeyboardButton(text=f"{flag}{label}", callback_data=f"adm:chat:{c.chat_id}")]
         )
 
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:chats:{page - 1}"))
-    if offset + CHATS_PER_PAGE < total:
-        nav.append(InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:chats:{page + 1}"))
+    nav = _pager("adm:chats", page, total, CHATS_PER_PAGE)
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
@@ -172,15 +192,7 @@ async def render_chat(chat_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
     if not players:
         lines.append(texts.ADMIN_NO_PLAYERS)
 
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(
-            InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:chat:{chat_id}:{page - 1}")
-        )
-    if offset + PLAYERS_PER_CHAT < total_players:
-        nav.append(
-            InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:chat:{chat_id}:{page + 1}")
-        )
+    nav = _pager(f"adm:chat:{chat_id}", page, total_players, PLAYERS_PER_CHAT)
     if nav:
         rows.append(nav)
 
@@ -362,6 +374,12 @@ async def cmd_admin(message: Message, state: FSMContext) -> None:
 async def cb_home(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await _edit(callback, texts.ADMIN_TITLE, main_menu_kb())
+
+
+@router.callback_query(F.data == "adm:noop")
+async def cb_noop(callback: CallbackQuery) -> None:
+    # Inert page-indicator button in the pager row.
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("adm:chats:"))
@@ -715,11 +733,7 @@ async def render_find(query: str, page: int) -> tuple[str, InlineKeyboardMarkup]
         ]
         for p in window
     ]
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:fp:{page - 1}"))
-    if offset + FIND_PER_PAGE < total:
-        nav.append(InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:fp:{page + 1}"))
+    nav = _pager("adm:fp", page, total, FIND_PER_PAGE)
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
@@ -891,11 +905,7 @@ async def render_bcast_history(page: int) -> tuple[str, InlineKeyboardMarkup]:
     else:
         lines.append(texts.ADMIN_BCAST_NO_HISTORY)
 
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text=texts.BTN_PREV, callback_data=f"adm:bhist:{page - 1}"))
-    if offset + BCAST_HISTORY_PER_PAGE < total:
-        nav.append(InlineKeyboardButton(text=texts.BTN_NEXT, callback_data=f"adm:bhist:{page + 1}"))
+    nav = _pager("adm:bhist", page, total, BCAST_HISTORY_PER_PAGE)
     kb_rows: list[list[InlineKeyboardButton]] = []
     if nav:
         kb_rows.append(nav)

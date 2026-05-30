@@ -506,6 +506,12 @@ BTN_BCAST = "📢 Рассылка"
 BTN_HOME = "🏠 Меню"
 BTN_PREV = "« Назад"
 BTN_NEXT = "Вперёд »"
+BTN_FIRST = "⏮"
+BTN_LAST = "⏭"
+
+
+def pager_indicator(page: int, pages: int, total: int) -> str:
+    return f"{page + 1}/{pages} ({total})"
 BTN_BACK_LIST = "« К списку"
 BTN_BACK_CHAT = "« К чату"
 BTN_BACK = "« Назад"
