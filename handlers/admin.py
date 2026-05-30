@@ -360,6 +360,13 @@ async def _edit(callback: CallbackQuery, text: str, kb: InlineKeyboardMarkup | N
     await callback.answer()
 
 
+# Shown on every text-input prompt so an accidental tap never strands the admin
+# in an input state with no way out but to type something.
+_CANCEL_KB = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="adm:home")]]
+)
+
+
 def _confirm_kb(yes_data: str, back_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -499,7 +506,7 @@ async def cb_filter_chats(callback: CallbackQuery, state: FSMContext) -> None:
     sort = callback.data.split(":")[2]
     await state.set_state(AdminStates.filter_chats)
     await state.update_data(filter_sort=sort)
-    await _edit(callback, texts.ADMIN_ENTER_FILTER_CHATS, None)
+    await _edit(callback, texts.ADMIN_ENTER_FILTER_CHATS, _CANCEL_KB)
 
 
 @router.callback_query(F.data.startswith("adm:cfchats:"))
@@ -547,7 +554,7 @@ async def cb_filter_players(callback: CallbackQuery, state: FSMContext) -> None:
     chat_id, sort = int(parts[2]), parts[3]
     await state.set_state(AdminStates.filter_players)
     await state.update_data(filter_chat=chat_id, filter_sort=sort)
-    await _edit(callback, texts.ADMIN_ENTER_FILTER_PLAYERS, None)
+    await _edit(callback, texts.ADMIN_ENTER_FILTER_PLAYERS, _CANCEL_KB)
 
 
 @router.callback_query(F.data.startswith("adm:cfchat:"))
@@ -761,7 +768,7 @@ async def cb_ban_user_custom(callback: CallbackQuery, state: FSMContext) -> None
     chat_id, user_id = int(parts[2]), int(parts[3])
     await state.set_state(AdminStates.ban_reason)
     await state.update_data(ban_target="user", chat_id=chat_id, user_id=user_id)
-    await _edit(callback, texts.ADMIN_ENTER_BAN_REASON, None)
+    await _edit(callback, texts.ADMIN_ENTER_BAN_REASON, _CANCEL_KB)
 
 
 @router.callback_query(F.data.startswith("adm:burxc:"))
@@ -835,7 +842,7 @@ async def cb_ban_chat_custom(callback: CallbackQuery, state: FSMContext) -> None
     chat_id = int(callback.data.split(":")[2])
     await state.set_state(AdminStates.ban_reason)
     await state.update_data(ban_target="chat", chat_id=chat_id)
-    await _edit(callback, texts.ADMIN_ENTER_BAN_CHAT_REASON, None)
+    await _edit(callback, texts.ADMIN_ENTER_BAN_CHAT_REASON, _CANCEL_KB)
 
 
 @router.message(AdminStates.ban_reason)
@@ -964,7 +971,7 @@ async def cb_set_size(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, chat_id, user_id = callback.data.split(":")
     await state.set_state(AdminStates.set_size)
     await state.update_data(chat_id=int(chat_id), user_id=int(user_id))
-    await _edit(callback, texts.ADMIN_ENTER_SIZE, None)
+    await _edit(callback, texts.ADMIN_ENTER_SIZE, _CANCEL_KB)
 
 
 @router.message(AdminStates.set_size)
@@ -987,7 +994,7 @@ async def cb_set_name(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, chat_id, user_id = callback.data.split(":")
     await state.set_state(AdminStates.set_name)
     await state.update_data(chat_id=int(chat_id), user_id=int(user_id))
-    await _edit(callback, texts.ADMIN_ENTER_NAME, None)
+    await _edit(callback, texts.ADMIN_ENTER_NAME, _CANCEL_KB)
 
 
 @router.message(AdminStates.set_name)
@@ -1006,7 +1013,9 @@ async def msg_set_name(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "adm:find")
 async def cb_find(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.find_query)
-    await _edit(callback, texts.ADMIN_ENTER_FIND, None)
+    # Always offer a way out: an accidental tap on "find" must not strand the
+    # admin in the text-input state with no Back/Cancel button.
+    await _edit(callback, texts.ADMIN_ENTER_FIND, _CANCEL_KB)
 
 
 async def render_find(query: str, page: int) -> tuple[str, InlineKeyboardMarkup] | None:
@@ -1072,7 +1081,7 @@ async def cb_find_page(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "adm:bcast")
 async def cb_bcast(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.broadcast_text)
-    await _edit(callback, texts.ADMIN_ENTER_BCAST, None)
+    await _edit(callback, texts.ADMIN_ENTER_BCAST, _CANCEL_KB)
 
 
 def _bcast_mode_kb() -> InlineKeyboardMarkup:
