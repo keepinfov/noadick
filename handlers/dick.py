@@ -12,7 +12,6 @@ from models.disease import (
     disease_tag,
     roll_infection,
 )
-from handlers import cooldowns
 from repositories import events as E
 from repositories.players import (
     PlayerDict,
@@ -84,14 +83,8 @@ async def cmd_dick(message: Message) -> None:
             if last_dt.date() == now.date():
                 if changed:
                     await save_storage(chat_id, storage)
-                # Repeated /dick after today's play: answer at most once per
-                # cooldown window so the command can't flood the chat. The
-                # reminder self-deletes after a few seconds, like the generic
-                # cooldown notice, so the UX matches the other commands.
-                if not cooldown.check_and_touch(
-                    chat_id, user_id, "dick_repeat", get_config_sync().cd_dick_repeat
-                ):
-                    return
+                # Already played today: reply with the reminder on every repeat,
+                # with no throttle and no auto-delete.
                 mention = _mention(user_id, user.first_name)
                 rank = _rank(storage, user_id)
                 remaining = _time_until_midnight(now)
@@ -99,8 +92,7 @@ async def cmd_dick(message: Message) -> None:
                 text = texts.dick_already_today(mention, owner["size"], rank, remaining)
                 if dtag:
                     text += f"\n{dtag}"
-                sent = await message.answer(text, parse_mode="HTML")
-                cooldowns.schedule_autodelete(sent)
+                await message.answer(text, parse_mode="HTML")
                 return
 
         rolled = roll_delta()

@@ -156,7 +156,6 @@ class GlobalSettings(Base):
     __tablename__ = "global_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    cd_dick_repeat: Mapped[int] = mapped_column(Integer, default=10)
     cd_duel: Mapped[int] = mapped_column(Integer, default=10)
     cd_top: Mapped[int] = mapped_column(Integer, default=5)
     cd_me: Mapped[int] = mapped_column(Integer, default=5)

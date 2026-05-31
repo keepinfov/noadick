@@ -19,7 +19,6 @@ from repositories import global_settings as repo
 # key -> (human label, small step, big step, min, max). Drives both the panel
 # keyboard and the clamp bounds, so they can never drift apart.
 EDITABLE: list[tuple[str, str, int, int, int, int]] = [
-    ("cd_dick_repeat", "КД /dick (сек)", 5, 30, 0, 3600),
     ("cd_duel", "КД /duel (сек)", 5, 30, 0, 3600),
     ("cd_top", "КД /top (сек)", 5, 30, 0, 3600),
     ("cd_me", "КД /me (сек)", 5, 30, 0, 3600),
@@ -38,7 +37,6 @@ BOUNDS: dict[str, tuple[int, int]] = {k: (mn, mx) for k, _, _, _, mn, mx in EDIT
 LABELS: dict[str, str] = {k: lbl for k, lbl, _, _, _, _ in EDITABLE}
 
 DEFAULTS: dict[str, int] = {
-    "cd_dick_repeat": 10,
     "cd_duel": 10,
     "cd_top": 5,
     "cd_me": 5,
@@ -57,7 +55,6 @@ DEFAULTS: dict[str, int] = {
 
 @dataclass(frozen=True)
 class GlobalConfig:
-    cd_dick_repeat: int
     cd_duel: int
     cd_top: int
     cd_me: int
