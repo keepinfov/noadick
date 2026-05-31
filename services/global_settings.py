@@ -38,12 +38,12 @@ BOUNDS: dict[str, tuple[int, int]] = {k: (mn, mx) for k, _, _, _, mn, mx in EDIT
 LABELS: dict[str, str] = {k: lbl for k, lbl, _, _, _, _ in EDITABLE}
 
 DEFAULTS: dict[str, int] = {
-    "cd_dick_repeat": 60,
-    "cd_duel": 15,
-    "cd_top": 30,
-    "cd_me": 30,
-    "cd_ping": 10,
-    "cd_help": 30,
+    "cd_dick_repeat": 10,
+    "cd_duel": 10,
+    "cd_top": 5,
+    "cd_me": 5,
+    "cd_ping": 5,
+    "cd_help": 5,
     "cd_chat_ban_notice": 300,
     "cd_ban_notice": 300,
     "cd_dm_gate": 300,

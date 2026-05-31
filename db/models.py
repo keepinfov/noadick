@@ -156,12 +156,12 @@ class GlobalSettings(Base):
     __tablename__ = "global_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    cd_dick_repeat: Mapped[int] = mapped_column(Integer, default=60)
-    cd_duel: Mapped[int] = mapped_column(Integer, default=15)
-    cd_top: Mapped[int] = mapped_column(Integer, default=30)
-    cd_me: Mapped[int] = mapped_column(Integer, default=30)
-    cd_ping: Mapped[int] = mapped_column(Integer, default=10)
-    cd_help: Mapped[int] = mapped_column(Integer, default=30)
+    cd_dick_repeat: Mapped[int] = mapped_column(Integer, default=10)
+    cd_duel: Mapped[int] = mapped_column(Integer, default=10)
+    cd_top: Mapped[int] = mapped_column(Integer, default=5)
+    cd_me: Mapped[int] = mapped_column(Integer, default=5)
+    cd_ping: Mapped[int] = mapped_column(Integer, default=5)
+    cd_help: Mapped[int] = mapped_column(Integer, default=5)
     cd_chat_ban_notice: Mapped[int] = mapped_column(Integer, default=300)
     cd_ban_notice: Mapped[int] = mapped_column(Integer, default=300)
     cd_dm_gate: Mapped[int] = mapped_column(Integer, default=300)
