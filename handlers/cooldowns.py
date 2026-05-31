@@ -27,6 +27,12 @@ async def _autodelete(message: Message, delay: int) -> None:
         await message.delete()
 
 
+def schedule_autodelete(message: Message, delay: int = NOTICE_TTL) -> None:
+    """Fire-and-forget: delete ``message`` after ``delay`` seconds. Used for
+    transient throttle replies so they don't clutter the chat."""
+    asyncio.create_task(_autodelete(message, delay))
+
+
 async def _send_notice(message: Message) -> Message | None:
     """Best-effort notice send. Reply to the triggering command, but fall back to
     a plain chat message if the reply fails (e.g. the command was deleted, or a
