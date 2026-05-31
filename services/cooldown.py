@@ -21,3 +21,9 @@ def check_and_touch(chat_id: int, user_id: int, key: str, seconds: float) -> boo
         return False
     _last[k] = now
     return True
+
+
+def reset(chat_id: int, user_id: int, key: str) -> None:
+    """Forget a recorded touch so the next check_and_touch is allowed again.
+    Used to release a once-per-window flag whose action failed."""
+    _last.pop((chat_id, user_id, key), None)
