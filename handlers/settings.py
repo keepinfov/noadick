@@ -123,6 +123,16 @@ async def cb_st_toggle_diseases(callback: CallbackQuery, bot: Bot) -> None:
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(F.data.startswith("st:tgl:bank:"))
+async def cb_st_toggle_banking(callback: CallbackQuery, bot: Bot) -> None:
+    chat_id = int(callback.data.split(":")[3])
+    if not await _may_edit_settings(callback, bot, chat_id):
+        await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
+        return
+    await settings.toggle_banking(chat_id)
+    await _rerender(callback, chat_id)
+
+
 @router.callback_query(F.data.startswith("st:adj:"))
 async def cb_st_adjust(callback: CallbackQuery, bot: Bot) -> None:
     _, _, what, chat_id_s, delta_s = callback.data.split(":")

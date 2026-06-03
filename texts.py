@@ -604,12 +604,14 @@ SETTINGS_BAD_TZ = "Неизвестный часовой пояс. Пример:
 SETTINGS_NOT_ALLOWED = "Только администраторы чата могут менять настройки."
 
 
-def settings_screen(tz: str, diseases: bool, stake: int, timeout: int) -> str:
+def settings_screen(tz: str, diseases: bool, stake: int, timeout: int, banking: bool = True) -> str:
     on_off = "вкл" if diseases else "выкл"
+    bank_off = "вкл" if banking else "выкл"
     return (
         f"{SETTINGS_TITLE}\n\n"
         f"• Часовой пояс: <code>{html.escape(tz)}</code>\n"
         f"• Болезни: {on_off}\n"
+        f"• Банк: {bank_off}\n"
         f"• Ставка дуэли: {stake}\n"
         f"• Таймаут дуэли: {timeout} сек"
     )
@@ -617,6 +619,10 @@ def settings_screen(tz: str, diseases: bool, stake: int, timeout: int) -> str:
 
 def settings_btn_diseases(enabled: bool) -> str:
     return f"🦠 Болезни: {'✅' if enabled else '❌'}"
+
+
+def settings_btn_banking(enabled: bool) -> str:
+    return f"🏦 Банк: {'✅' if enabled else '❌'}"
 
 
 def settings_label_stake(value: int) -> str:
@@ -879,6 +885,187 @@ def res_user_unbanned(user_id: int) -> str:
 
 def res_chat_banned(chat_id: int) -> str:
     return f"Чат {chat_id} забанен."
+
+
+# --------------------------------------------------------------------- /bank ---
+
+
+def _dur(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    mins = (seconds % 3600) // 60
+    if days:
+        return f"{days} д {hours} ч"
+    if hours:
+        return f"{hours} ч {mins} мин"
+    return f"{mins} мин"
+
+
+BANK_TITLE = "🏦 <b>Банк «Корпорации»</b>"
+BANK_DISABLED = "🏦 Банк тут прикрыли. Иди ной админам, а Корпорации твои сопли до фонаря."
+BANK_GROUP_ONLY = "🏦 Банк пашет только в группах — там, где есть у кого отжать. В личке тебя и грабить лень."
+
+BTN_BANK_DEPOSIT = "💰 Вклад"
+BTN_BANK_LOAN = "🏦 Кредит"
+BTN_BANK_CORP = "🏢 Корпорация"
+BTN_BANK_REFRESH = "🔄 Обновить"
+BTN_BANK_CLOSE = "✖ Закрыть"
+BTN_BANK_BACK = "« Назад"
+BTN_RULES_RUDE = "📜 Правила по-пацански"
+BTN_RULES_STRICT = "🤓 Правила занудные"
+BTN_DEP_OPEN = "➕ Положить"
+BTN_DEP_WITHDRAW = "➖ Снять"
+BTN_LOAN_TAKE = "➕ Взять"
+BTN_LOAN_REPAY = "➖ Погасить"
+BTN_AMOUNT_CUSTOM = "✏️ Своя сумма"
+BTN_AMOUNT_ALL = "Всё"
+
+
+def bank_screen(s) -> str:
+    lines = [BANK_TITLE, "", f"💪 На руках (ликвидно): <b>{s.size}</b>"]
+    if s.deposit:
+        d = s.deposit
+        status = "🔓 созрел" if d.matured else f"🔒 до созревания {_dur(d.matures_at - _now_ts())}"
+        lines.append(
+            f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} %) · {status}"
+        )
+    else:
+        lines.append("💰 Вклад: голяк. Деньги от тебя шарахаются, нищук.")
+    if s.loan:
+        ln = s.loan
+        flag = "❗️ПРОСРОЧКА" if ln.defaulted else f"до сдачи {_dur(ln.due_at - _now_ts())}"
+        lines.append(f"🏦 Долг: <b>{ln.debt}</b> ({ln.principal}+{ln.interest}%) · {flag}")
+    else:
+        lines.append("🏦 Долг: чисто. Пока никому не должен, везунчик.")
+    lines.append(f"📈 Кредитный рейтинг: +{s.loans_repaid} / −{s.loans_defaulted}")
+    lines.append(f"🧾 Доступный кредит: <b>{s.loan_limit}</b>")
+    return "\n".join(lines)
+
+
+def _now_ts() -> int:
+    import time as _t
+    return int(_t.time())
+
+
+def bank_dep_screen(s) -> str:
+    lines = [BANK_TITLE, "", "💰 <b>Вклад</b>", ""]
+    if s.deposit:
+        d = s.deposit
+        status = "🔓 созрел — снимай без штрафа" if d.matured else f"🔒 ещё {_dur(d.matures_at - _now_ts())} под замком"
+        lines += [
+            f"Тело: <b>{d.principal}</b>",
+            f"Накапало: <b>{d.accrued}</b>",
+            status,
+        ]
+    else:
+        lines.append("Вклада нет. Жмёшься, как последний скряга.")
+    lines += ["", f"На руках: {s.size}", "", "⚠️ Процент капает только в дни, когда ты тыкаешь /dick, потом затухает и упирается в потолок. Закинул и залёг на дно — так и сдохнешь нищим."]
+    return "\n".join(lines)
+
+
+def bank_loan_screen(s) -> str:
+    lines = [BANK_TITLE, "", "🏦 <b>Кредит</b>", ""]
+    if s.loan:
+        ln = s.loan
+        flag = "❗️ПРОСРОЧКА — Корпорация уже точит ножи" if ln.defaulted else f"вернуть за {_dur(ln.due_at - _now_ts())}"
+        lines += [f"Долг: <b>{ln.debt}</b> ({ln.principal} тело + {ln.interest} проценты)", flag]
+    else:
+        lines.append("Долгов нет. Пока не влез, терпила.")
+    lines += ["", f"На руках: {s.size}", f"Доступно взять: <b>{s.loan_limit}</b>", "", "⚠️ Не вернёшь в срок — выгрызем с /dick и с побед в дуэлях, а в ЛС прилетит такое письмо, что уши свернутся."]
+    return "\n".join(lines)
+
+
+def corp_screen(corp) -> str:
+    bankrupt = corp.balance < 0
+    head = "🏢 <b>Корпорация</b>"
+    if bankrupt:
+        mood = f"💀 БАНКРОТ. В кассе <b>{corp.balance}</b> — дыра, в которую провалилась вся ваша нищая орава."
+    else:
+        mood = f"💼 В кассе: <b>{corp.balance}</b>. Жиреет на ваших дуэлях и кредитах, а вы и рады спонсировать."
+    return (
+        f"{head}\n\n{mood}\n\n"
+        f"• Налогов с дуэлей: {corp.total_tax}\n"
+        f"• Процентов с кредитов: {corp.total_interest_earned}\n"
+        f"• Выплачено по вкладам: {corp.total_interest_paid}\n"
+        f"• Штрафов и конфискаций: {corp.total_penalties}"
+    )
+
+
+def bank_enter_amount(action: str) -> str:
+    return f"Введи сумму ({action}) числом. Или жми «Отмена»."
+
+
+# Op result / error notices.
+BANK_ERR = {
+    "no_size": "💢 Класть нечего, голодранец. Сперва отрасти хоть что-то через /dick.",
+    "no_deposit": "💢 Какой вклад? У тебя и в помине ничего нет. Снимать воздух будешь?",
+    "no_loan": "💢 Тебе никто и копейки не доверил. Гасить нечего, фантазёр.",
+    "loan_exists": "💢 У тебя уже долг на шее болтается. Один хомут на рыло — сперва расплатись.",
+    "no_credit": "💢 Кредитный рейтинг — дно из донных. Корпорация в голос ржёт над твоей мордой.",
+    "corp_broke": "💢 В кассе Корпорации шаром покати. Раздавать нечего — иди наполняй её дуэлями, а потом приходи клянчить.",
+    "bad_amount": "💢 Это не сумма, а каракули. Тыкни нормальное число, грамотей.",
+}
+
+
+def dep_opened(amount: int) -> str:
+    return f"💰 Заморозил <b>{amount}</b> во вкладе. В /top тебя теперь не видать, в дуэли это не сунешь. Сиди, труси над процентами, жмот."
+
+
+def dep_withdrawn(amount: int, penalty: int) -> str:
+    if penalty > 0:
+        return f"➖ Дёрнул раньше срока: на руки <b>{amount}</b>, а <b>{penalty}</b> Корпорация отжала за твоё нетерпение. Будешь знать."
+    return f"➖ Забрал со вклада <b>{amount}</b>. Дотерпел до срока — на этот раз без штрафа, везунчик."
+
+
+def loan_taken(amount: int, due_at: int) -> str:
+    return f"🏦 На, держи <b>{amount}</b> в долг. Вернуть до {fmt_datetime(due_at)}. Кинешь — потом не вой, сам напросился."
+
+
+def loan_repaid(amount: int, cleared: bool) -> str:
+    if cleared:
+        return f"✅ Закрыл долг под ноль (−{amount}). Рейтинг подрос, коллекторы убрали биты обратно в багажник."
+    return f"➖ Кинул <b>{amount}</b> в счёт долга. Остальное капает, не расслабляй булки."
+
+
+def dick_deposit_interest(amount: int) -> str:
+    return f"💰 Вклад капнул +{amount} — за то, что сегодня не сдох и доковылял до /dick."
+
+
+def dick_garnished(amount: int) -> str:
+    return f"🩸 Коллекторы выгрызли {amount} с твоего прироста в счёт долга. Не нравится — гаси."
+
+
+def duel_garnished(amount: int) -> str:
+    return f"🩸 С выигрыша отжали {amount} за твою просрочку. Победил, а навар уплыл — поделом."
+
+
+def collector_reminder(debt: int, overdue_for: int) -> str:
+    return (
+        f"📨 <b>Письмо от Корпорации</b>\n\n"
+        f"Слышь, должник. За тобой <b>{debt}</b>, и просрочка уже {_dur(overdue_for)}. "
+        f"Долг с каждым днём жиреет, а мы тихонько режем твои /dick и победы. "
+        f"Тащи бабки через /bank, пока мы добрые — а добрые мы недолго."
+    )
+
+
+def profile_bank(s) -> str | None:
+    """One-line bank summary for /me. None when the player has no bank activity."""
+    parts: list[str] = []
+    if s.deposit:
+        parts.append(f"вклад {s.deposit.principal}(+{s.deposit.accrued})")
+    if s.loan:
+        flag = "❗просрочка" if s.loan.defaulted else "в срок"
+        parts.append(f"долг {s.loan.debt} ({flag})")
+    if not parts and s.loans_repaid == 0 and s.loans_defaulted == 0:
+        return None
+    rating = f"рейтинг +{s.loans_repaid}/−{s.loans_defaulted}"
+    body = " · ".join([*parts, rating]) if parts else rating
+    return f"🏦 Банк: {body}"
+
+
+ADMIN_GSET_BANK_TITLE = "🏦 <b>Настройки банка</b>\nСтавки и сроки едины для всех чатов."
+BTN_GSET_BANK = "🏦 Настройки банка"
 
 
 def res_chat_unbanned(chat_id: int) -> str:

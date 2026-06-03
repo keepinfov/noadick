@@ -10,8 +10,9 @@ from aiogram.types import BotCommand, ErrorEvent
 from dotenv import load_dotenv
 
 from db.engine import dispose_engine, init_db
-from handlers import admin, dick, duel, help, modtools, ping, profile, settings, top
+from handlers import admin, bank, dick, duel, help, modtools, ping, profile, settings, top
 from middlewares.registry import RegistryMiddleware
+from services import bank as bank_service
 from services import global_settings
 
 
@@ -54,7 +55,7 @@ async def main() -> None:
 
     dp.include_routers(
         admin.router, settings.router, modtools.router, dick.router, duel.router,
-        profile.router, top.router, help.router, ping.router,
+        bank.router, profile.router, top.router, help.router, ping.router,
     )
 
     await bot.set_my_commands([
@@ -62,15 +63,32 @@ async def main() -> None:
         BotCommand(command="duel", description="Вызвать на дуэль (ответом)"),
         BotCommand(command="me", description="Твой профиль и статистика"),
         BotCommand(command="top", description="Топ-10 по размеру"),
+        BotCommand(command="bank", description="Банк: вклады и кредиты"),
+        BotCommand(command="corp", description="Счёт Корпорации"),
         BotCommand(command="help", description="Список команд"),
         BotCommand(command="ping", description="ping-pong"),
     ])
 
+    collector = asyncio.create_task(_collector_loop(bot))
+
     try:
         await dp.start_polling(bot)
     finally:
+        collector.cancel()
         await bot.session.close()
         await dispose_engine()
+
+
+async def _collector_loop(bot: Bot) -> None:
+    """Periodically accrue loan interest, default the overdue, nag debtors and
+    roll deposit confiscations. The interval is an admin-tunable global setting."""
+    while True:
+        interval = max(60, global_settings.get_config_sync().collector_interval_sec)
+        await asyncio.sleep(interval)
+        try:
+            await bank_service.run_collector_pass(bot)
+        except Exception:
+            logging.exception("Bank collector pass failed")
 
 
 if __name__ == "__main__":

@@ -38,6 +38,12 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                text=texts.settings_btn_banking(eff.banking_enabled),
+                callback_data=f"st:tgl:bank:{chat_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text=texts.settings_label_stake(eff.duel_stake_default),
                 callback_data="st:noop",
             )
@@ -75,6 +81,7 @@ async def render_settings(
 ) -> tuple[str, InlineKeyboardMarkup]:
     eff = await settings.get_effective(chat_id)
     text = texts.settings_screen(
-        eff.tz, eff.diseases_enabled, eff.duel_stake_default, eff.duel_timeout
+        eff.tz, eff.diseases_enabled, eff.duel_stake_default, eff.duel_timeout,
+        eff.banking_enabled,
     )
     return text, settings_kb(chat_id, eff, scope=scope)

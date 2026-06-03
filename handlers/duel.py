@@ -18,7 +18,7 @@ from handlers import cooldowns
 from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
-from services import cooldown
+from services import bank, cooldown
 from services.global_settings import get_config_sync
 from services.settings import get_effective
 import texts
@@ -388,7 +388,8 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             base_chance,
         )
 
-        winner_profit = max(1, int(stake * 0.5))
+        corp_tax = int(stake * random.uniform(0.30, 0.40))
+        winner_profit = max(1, stake - corp_tax)
         corp_tax = stake - winner_profit
 
         if winner_is_attacker:
@@ -404,6 +405,15 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         loser["size"] = max(0, loser["size"] - stake)
         winner["size"] += winner_profit
         storage[loser_key] = loser
+        storage[winner_key] = winner
+
+        # The house cut used to vanish; it now funds the Corporation. If the winner
+        # is in default, part of their winnings is seized toward the debt.
+        winner_id_for_bank = data["attacker_id"] if winner_is_attacker else data["defender_id"]
+        await bank.credit_corp_tax(chat_id, winner_id_for_bank, corp_tax)
+        duel_garnished = await bank.garnish_duel_on_dict(
+            chat_id, winner_id_for_bank, winner, winner_profit
+        )
         storage[winner_key] = winner
 
         infection_msg = try_infect(winner, loser) or ""
@@ -427,6 +437,8 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             reaction_comment, corp_line,
             attacker_tag, defender_tag, disease_note, infection_msg,
         )
+        if duel_garnished:
+            result += f"\n\n{texts.duel_garnished(duel_garnished)}"
 
         await save_storage(chat_id, storage)
 

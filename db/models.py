@@ -68,10 +68,73 @@ class Player(Base):
     disease_id: Mapped[str | None] = mapped_column(String, nullable=True)
     disease_caught_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_chat_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Credit history feeding the loan-limit multiplier (see services/bank.py).
+    loans_repaid: Mapped[int] = mapped_column(Integer, default=0)
+    loans_defaulted: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
     chat: Mapped[Chat] = relationship(back_populates="players")
+
+
+class Corporation(Base):
+    """The single global house account. Collects duel tax, loan interest,
+    deposit penalties and confiscations from every chat; pays out deposit
+    interest. Balance may go negative — that is the "bankruptcy" event."""
+
+    __tablename__ = "corporation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+    total_tax: Mapped[int] = mapped_column(Integer, default=0)
+    total_interest_earned: Mapped[int] = mapped_column(Integer, default=0)
+    total_interest_paid: Mapped[int] = mapped_column(Integer, default=0)
+    total_penalties: Mapped[int] = mapped_column(Integer, default=0)
+    rules_url_rude: Mapped[str] = mapped_column(String, default="")
+    rules_url_strict: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class Deposit(Base):
+    """One active deposit per (chat, user). Opening moves size out of the
+    player (freezing it: hidden from /top, unusable in duels, no /dick growth);
+    withdrawing returns principal + accrued − early-withdrawal penalty."""
+
+    __tablename__ = "deposits"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    principal: Mapped[int] = mapped_column(Integer, default=0)
+    accrued: Mapped[int] = mapped_column(Integer, default=0)
+    opened_at: Mapped[int] = mapped_column(Integer, default=_now)
+    matures_at: Mapped[int] = mapped_column(Integer, default=0)
+    # Number of distinct active days that have earned interest (drives the
+    # decaying effective rate). Interest is credited only on days the owner
+    # actually plays /dick — passive deposits do not grow.
+    active_days_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_accrual_day: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class Loan(Base):
+    """One active loan per (chat, user). Principal is credited to liquid size
+    immediately; interest accrues by calendar time. Past due_at the loan is in
+    default and is recovered via /dick and duel garnishment."""
+
+    __tablename__ = "loans"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    principal: Mapped[int] = mapped_column(Integer, default=0)
+    accrued_interest: Mapped[int] = mapped_column(Integer, default=0)
+    opened_at: Mapped[int] = mapped_column(Integer, default=_now)
+    due_at: Mapped[int] = mapped_column(Integer, default=0)
+    last_accrual_at: Mapped[int] = mapped_column(Integer, default=_now)
+    last_reminded_at: Mapped[int] = mapped_column(Integer, default=0)
+    defaulted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
 class AuditLog(Base):
@@ -169,6 +232,22 @@ class GlobalSettings(Base):
     bcast_rate_delay_ms: Mapped[int] = mapped_column(Integer, default=50)
     active_days: Mapped[int] = mapped_column(Integer, default=30)
     page_size: Mapped[int] = mapped_column(Integer, default=8)
+    # Banking knobs (deposits / loans / collector). See services/global_settings.
+    dep_rate_pct: Mapped[int] = mapped_column(Integer, default=3)
+    dep_rate_decay_pct: Mapped[int] = mapped_column(Integer, default=15)
+    dep_rate_floor_pct: Mapped[int] = mapped_column(Integer, default=1)
+    dep_yield_cap_pct: Mapped[int] = mapped_column(Integer, default=50)
+    dep_term_days: Mapped[int] = mapped_column(Integer, default=7)
+    dep_early_penalty_pct: Mapped[int] = mapped_column(Integer, default=30)
+    dep_confisc_chance_pct: Mapped[int] = mapped_column(Integer, default=2)
+    dep_confisc_max_pct: Mapped[int] = mapped_column(Integer, default=10)
+    loan_rate_pct: Mapped[int] = mapped_column(Integer, default=5)
+    loan_max_base_pct: Mapped[int] = mapped_column(Integer, default=100)
+    loan_term_days: Mapped[int] = mapped_column(Integer, default=5)
+    loan_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
+    loan_duel_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
+    collector_interval_sec: Mapped[int] = mapped_column(Integer, default=3600)
+    reminder_cooldown_sec: Mapped[int] = mapped_column(Integer, default=21600)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
@@ -181,6 +260,7 @@ class ChatSettings(Base):
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     tz: Mapped[str | None] = mapped_column(String, nullable=True)
     diseases_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    banking_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     duel_stake_default: Mapped[int] = mapped_column(Integer, default=5)
     duel_timeout: Mapped[int] = mapped_column(Integer, default=60)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)

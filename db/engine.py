@@ -22,6 +22,28 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     },
     "players": {
         "is_chat_banned": "INTEGER",
+        "loans_repaid": "INTEGER DEFAULT 0",
+        "loans_defaulted": "INTEGER DEFAULT 0",
+    },
+    "chat_settings": {
+        "banking_enabled": "INTEGER DEFAULT 1",
+    },
+    "global_settings": {
+        "dep_rate_pct": "INTEGER DEFAULT 3",
+        "dep_rate_decay_pct": "INTEGER DEFAULT 15",
+        "dep_rate_floor_pct": "INTEGER DEFAULT 1",
+        "dep_yield_cap_pct": "INTEGER DEFAULT 50",
+        "dep_term_days": "INTEGER DEFAULT 7",
+        "dep_early_penalty_pct": "INTEGER DEFAULT 30",
+        "dep_confisc_chance_pct": "INTEGER DEFAULT 2",
+        "dep_confisc_max_pct": "INTEGER DEFAULT 10",
+        "loan_rate_pct": "INTEGER DEFAULT 5",
+        "loan_max_base_pct": "INTEGER DEFAULT 100",
+        "loan_term_days": "INTEGER DEFAULT 5",
+        "loan_garnish_pct": "INTEGER DEFAULT 50",
+        "loan_duel_garnish_pct": "INTEGER DEFAULT 50",
+        "collector_interval_sec": "INTEGER DEFAULT 3600",
+        "reminder_cooldown_sec": "INTEGER DEFAULT 21600",
     },
 }
 

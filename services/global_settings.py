@@ -33,8 +33,30 @@ EDITABLE: list[tuple[str, str, int, int, int, int]] = [
     ("active_days", "Окно «активных» (дней)", 5, 30, 1, 365),
     ("page_size", "Размер страницы", 1, 5, 3, 50),
 ]
-BOUNDS: dict[str, tuple[int, int]] = {k: (mn, mx) for k, _, _, _, mn, mx in EDITABLE}
-LABELS: dict[str, str] = {k: lbl for k, lbl, _, _, _, _ in EDITABLE}
+
+# Banking knobs live on a separate admin sub-panel so the flat keyboard above
+# does not blow past Telegram's button cap. Same tuple shape and callback path.
+EDITABLE_BANK: list[tuple[str, str, int, int, int, int]] = [
+    ("dep_rate_pct", "Вклад: ставка/актив.день (%)", 1, 5, 0, 100),
+    ("dep_rate_decay_pct", "Вклад: затухание ставки (%)", 5, 10, 0, 100),
+    ("dep_rate_floor_pct", "Вклад: пол ставки (%)", 1, 5, 0, 100),
+    ("dep_yield_cap_pct", "Вклад: потолок дохода (% тела)", 5, 25, 0, 1000),
+    ("dep_term_days", "Вклад: срок (дней)", 1, 7, 1, 365),
+    ("dep_early_penalty_pct", "Вклад: штраф досрочно (%)", 5, 10, 0, 100),
+    ("dep_confisc_chance_pct", "Вклад: шанс конфискации (%)", 1, 5, 0, 100),
+    ("dep_confisc_max_pct", "Вклад: макс. конфискация (%)", 1, 5, 0, 100),
+    ("loan_rate_pct", "Кредит: ставка/день (%)", 1, 5, 0, 100),
+    ("loan_max_base_pct", "Кредит: лимит (% size)", 10, 50, 0, 1000),
+    ("loan_term_days", "Кредит: срок (дней)", 1, 5, 1, 365),
+    ("loan_garnish_pct", "Кредит: гарнишмент /dick (%)", 5, 25, 0, 100),
+    ("loan_duel_garnish_pct", "Кредит: гарнишмент дуэли (%)", 5, 25, 0, 100),
+    ("collector_interval_sec", "Коллектор: период (сек)", 300, 3600, 60, 86400),
+    ("reminder_cooldown_sec", "Напоминание: КД (сек)", 1800, 3600, 0, 604800),
+]
+
+_ALL_EDITABLE = EDITABLE + EDITABLE_BANK
+BOUNDS: dict[str, tuple[int, int]] = {k: (mn, mx) for k, _, _, _, mn, mx in _ALL_EDITABLE}
+LABELS: dict[str, str] = {k: lbl for k, lbl, _, _, _, _ in _ALL_EDITABLE}
 
 DEFAULTS: dict[str, int] = {
     "cd_duel": 10,
@@ -50,6 +72,21 @@ DEFAULTS: dict[str, int] = {
     "bcast_rate_delay_ms": 50,
     "active_days": 30,
     "page_size": 8,
+    "dep_rate_pct": 3,
+    "dep_rate_decay_pct": 15,
+    "dep_rate_floor_pct": 1,
+    "dep_yield_cap_pct": 50,
+    "dep_term_days": 7,
+    "dep_early_penalty_pct": 30,
+    "dep_confisc_chance_pct": 2,
+    "dep_confisc_max_pct": 10,
+    "loan_rate_pct": 5,
+    "loan_max_base_pct": 100,
+    "loan_term_days": 5,
+    "loan_garnish_pct": 50,
+    "loan_duel_garnish_pct": 50,
+    "collector_interval_sec": 3600,
+    "reminder_cooldown_sec": 21600,
 }
 
 
@@ -68,6 +105,21 @@ class GlobalConfig:
     bcast_rate_delay_ms: int
     active_days: int
     page_size: int
+    dep_rate_pct: int
+    dep_rate_decay_pct: int
+    dep_rate_floor_pct: int
+    dep_yield_cap_pct: int
+    dep_term_days: int
+    dep_early_penalty_pct: int
+    dep_confisc_chance_pct: int
+    dep_confisc_max_pct: int
+    loan_rate_pct: int
+    loan_max_base_pct: int
+    loan_term_days: int
+    loan_garnish_pct: int
+    loan_duel_garnish_pct: int
+    collector_interval_sec: int
+    reminder_cooldown_sec: int
 
     @property
     def size_weight(self) -> float:

@@ -20,7 +20,7 @@ from repositories.players import (
     get_storage,
     save_storage,
 )
-from services import cooldown
+from services import bank, cooldown
 from services.game import roll_delta
 from services.global_settings import get_config_sync
 from services.settings import get_effective, resolve_tz
@@ -114,6 +114,16 @@ async def cmd_dick(message: Message) -> None:
             player["disease"] = {"id": infection.id, "caught_at": int(now.timestamp())}
             disease_msg = f"\n\n{infection.catch_message}"
 
+        # Bank hooks: divert part of a positive gain toward a defaulted loan, and
+        # credit one active-day's deposit interest. Garnish mutates player["size"],
+        # so it must run before rank/size are read for the result message.
+        gain = player["size"] - before
+        garnished = await bank.garnish_on_dict(chat_id, user_id, player, gain)
+        storage[uid_str] = player
+        dep_interest = await bank.accrue_deposit_on_play(
+            chat_id, user_id, now.date().isoformat()
+        )
+
         mention = _mention(user_id, user.first_name)
         rank = _rank(storage, user_id)
         remaining = _time_until_midnight(now)
@@ -128,6 +138,10 @@ async def cmd_dick(message: Message) -> None:
         if dtag and not infection:
             text += f"\n{dtag}"
         text += disease_msg
+        if garnished:
+            text += f"\n{texts.dick_garnished(garnished)}"
+        if dep_interest:
+            text += f"\n{texts.dick_deposit_interest(dep_interest)}"
 
         await save_storage(chat_id, storage)
 

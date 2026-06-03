@@ -8,7 +8,7 @@ import texts
 from handlers import cooldowns
 from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
-from services import stats as S
+from services import bank, stats as S
 from services.global_settings import get_config_sync
 
 router = Router()
@@ -130,6 +130,10 @@ async def cmd_me(message: Message, bot: Bot) -> None:
     )
     lines.append(texts.profile_stolen(profile.stolen_total, profile.lost_in_duels))
     lines.append(texts.profile_infections(profile.diseases_caught))
+
+    bank_line = texts.profile_bank(await bank.get_summary(chat_id, user_id))
+    if bank_line:
+        lines.append(bank_line)
 
     if profile.current_disease:
         d = DISEASE_BY_ID.get(profile.current_disease)

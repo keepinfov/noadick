@@ -17,6 +17,7 @@ from repositories import chat_settings as repo
 _TTL = 300  # seconds
 
 DEFAULT_DISEASES_ENABLED = True
+DEFAULT_BANKING_ENABLED = True
 DEFAULT_DUEL_STAKE = 5
 DEFAULT_DUEL_TIMEOUT = 60
 
@@ -34,6 +35,7 @@ SETTING_KEYS = ("tz", "diseases", "duel_stake", "duel_timeout")
 class EffectiveSettings:
     tz: str
     diseases_enabled: bool
+    banking_enabled: bool
     duel_stake_default: int
     duel_timeout: int
 
@@ -60,6 +62,7 @@ async def get_effective(chat_id: int) -> EffectiveSettings:
         eff = EffectiveSettings(
             tz=_env_tz(),
             diseases_enabled=DEFAULT_DISEASES_ENABLED,
+            banking_enabled=DEFAULT_BANKING_ENABLED,
             duel_stake_default=DEFAULT_DUEL_STAKE,
             duel_timeout=DEFAULT_DUEL_TIMEOUT,
         )
@@ -67,6 +70,7 @@ async def get_effective(chat_id: int) -> EffectiveSettings:
         eff = EffectiveSettings(
             tz=row.tz or _env_tz(),
             diseases_enabled=bool(row.diseases_enabled),
+            banking_enabled=bool(row.banking_enabled),
             duel_stake_default=int(row.duel_stake_default),
             duel_timeout=int(row.duel_timeout),
         )
@@ -157,5 +161,14 @@ async def toggle_diseases(chat_id: int) -> bool:
     eff = await get_effective(chat_id)
     new_val = not eff.diseases_enabled
     await repo.upsert_settings(chat_id, diseases_enabled=new_val)
+    invalidate(chat_id)
+    return new_val
+
+
+async def toggle_banking(chat_id: int) -> bool:
+    """Flip the per-chat banking switch; returns the new state."""
+    eff = await get_effective(chat_id)
+    new_val = not eff.banking_enabled
+    await repo.upsert_settings(chat_id, banking_enabled=new_val)
     invalidate(chat_id)
     return new_val

@@ -13,6 +13,18 @@ DUEL = "duel"
 INFECTION = "infection"
 ADMIN_ADJUST = "admin_adjust"
 BASELINE = "baseline"
+# Banking events.
+DEPOSIT_OPEN = "deposit_open"
+DEPOSIT_WITHDRAW = "deposit_withdraw"
+DEPOSIT_INTEREST = "deposit_interest"
+DEPOSIT_PENALTY = "deposit_penalty"
+CONFISCATION = "confiscation"
+LOAN_OPEN = "loan_open"
+LOAN_REPAY = "loan_repay"
+LOAN_INTEREST = "loan_interest"
+LOAN_GARNISH = "loan_garnish"
+LOAN_DEFAULT = "loan_default"
+CORP_TAX = "corp_tax"
 
 
 async def log_event(
