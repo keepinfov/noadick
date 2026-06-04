@@ -23,6 +23,18 @@ def check_and_touch(chat_id: int, user_id: int, key: str, seconds: float) -> boo
     return True
 
 
+def peek(chat_id: int, user_id: int, key: str, seconds: float) -> bool:
+    """Return True if the action is allowed, WITHOUT recording a touch. Use when
+    the touch should happen conditionally (e.g. only on a rejection)."""
+    last = _last.get((chat_id, user_id, key))
+    return last is None or (time.monotonic() - last) >= seconds
+
+
+def touch(chat_id: int, user_id: int, key: str) -> None:
+    """Record a touch now, opening a fresh cooldown window for this key."""
+    _last[(chat_id, user_id, key)] = time.monotonic()
+
+
 def reset(chat_id: int, user_id: int, key: str) -> None:
     """Forget a recorded touch so the next check_and_touch is allowed again.
     Used to release a once-per-window flag whose action failed."""

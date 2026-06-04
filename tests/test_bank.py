@@ -69,7 +69,9 @@ def test_max_loan_scales_with_size_and_history():
     assert base == 1000 * c.loan_max_base_pct // 100
     assert bank.max_loan(1000, 4, 0, c) == base * 2  # good history doubles
     assert bank.max_loan(1000, 0, 2, c) == 0  # defaults zero out credit
-    assert bank.max_loan(0, 5, 0, c) == 0  # nothing to lend against
+    # A broke (size 0) but un-defaulted player still gets the starter floor.
+    assert bank.max_loan(0, 5, 0, c) == c.loan_min
+    assert bank.max_loan(0, 0, 2, c) == 0  # but heavy defaulters stay shut out
 
 
 def test_loan_interest_accrued():
@@ -176,7 +178,8 @@ async def test_deposit_interest_capped_by_empty_corp(db):
     from services import bank
 
     await _seed_player(1000)
-    await bank.open_deposit(CHAT, USER, 1000)
+    await bank.open_deposit(CHAT, USER, 1000)  # principal funds the till (+1000)
+    await repo.corp_apply(delta=-1000)  # but drain it dry before accrual
     # Corporation is broke → it pays nothing and the house never goes negative.
     interest = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03")
     assert interest == 0
@@ -192,13 +195,33 @@ async def test_deposit_interest_paid_from_funded_corp(db):
     from services import bank
 
     await _seed_player(1000)
-    await bank.open_deposit(CHAT, USER, 1000)
-    await repo.corp_apply(delta=10_000)  # fund the till
+    await bank.open_deposit(CHAT, USER, 1000)  # principal funds the till (+1000)
+    await repo.corp_apply(delta=10_000)  # plus extra house profit
     interest = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03")
     assert interest > 0
     corp = await repo.get_corp()
-    assert corp.balance == 10_000 - interest
+    assert corp.balance == 11_000 - interest
     assert corp.total_interest_paid == interest
+
+
+async def test_bad_credit_rejection_locks_out_reapply(db):
+    from repositories import bank as repo
+    from services import bank, cooldown
+
+    cooldown.reset(CHAT, USER, "loan_denied")
+    # Two defaults zero the credit multiplier → history rejection, regardless of a
+    # funded till.
+    await _seed_player(1000, loans_defaulted=2)
+    await repo.corp_apply(delta=10_000)
+    with pytest.raises(bank.BankError) as e:
+        await bank.take_loan(CHAT, USER, 50)
+    assert e.value.code == "no_credit"
+    # The refusal opens a cooldown: an immediate re-apply is bounced without being
+    # re-evaluated, so a debtor can't spam the till.
+    with pytest.raises(bank.BankError) as e:
+        await bank.take_loan(CHAT, USER, 50)
+    assert e.value.code == "loan_denied"
+    cooldown.reset(CHAT, USER, "loan_denied")
 
 
 async def test_take_loan_needs_funded_corp(db):
@@ -306,4 +329,6 @@ async def test_roll_confiscation_deterministic(db):
     assert seized > 0
     corp = await repo.get_corp()
     assert corp.total_penalties == seized
-    assert corp.balance == seized
+    # The 1000 principal already funded the till on open; confiscation only books
+    # the seized slice as earnings without moving cash, so the balance is unchanged.
+    assert corp.balance == 1000

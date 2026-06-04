@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from sqlalchemy import text
@@ -28,6 +29,9 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     "chat_settings": {
         "banking_enabled": "INTEGER DEFAULT 1",
     },
+    "corporation": {
+        "deposits_reconciled": "INTEGER DEFAULT 0",
+    },
     "global_settings": {
         "dep_rate_pct": "INTEGER DEFAULT 3",
         "dep_rate_decay_pct": "INTEGER DEFAULT 15",
@@ -39,8 +43,10 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "dep_confisc_max_pct": "INTEGER DEFAULT 10",
         "loan_rate_pct": "INTEGER DEFAULT 5",
         "loan_max_base_pct": "INTEGER DEFAULT 100",
+        "loan_min": "INTEGER DEFAULT 15",
         "loan_term_days": "INTEGER DEFAULT 5",
         "loan_garnish_pct": "INTEGER DEFAULT 50",
+        "loan_deny_cooldown_sec": "INTEGER DEFAULT 1800",
         "loan_duel_garnish_pct": "INTEGER DEFAULT 50",
         "collector_interval_sec": "INTEGER DEFAULT 3600",
         "reminder_cooldown_sec": "INTEGER DEFAULT 21600",
@@ -86,6 +92,44 @@ async def init_db() -> None:
                     await conn.execute(
                         text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
                     )
+        await _reconcile_deposits(conn)
+
+
+async def _reconcile_deposits(conn) -> None:
+    """One-off: deposits now fund the Corporation's till, but older databases only
+    credited deposit principal to the per-player rows. Back-credit the live
+    principal into the house balance exactly once (guarded by a flag)."""
+    done = (
+        await conn.execute(text("SELECT deposits_reconciled FROM corporation WHERE id = 1"))
+    ).scalar()
+    if done:
+        return
+    total = (
+        await conn.execute(
+            text("SELECT COALESCE(SUM(principal), 0) FROM deposits WHERE principal > 0")
+        )
+    ).scalar() or 0
+    exists = (await conn.execute(text("SELECT 1 FROM corporation WHERE id = 1"))).scalar()
+    if exists is None:
+        # Seed every column (Python-side ORM defaults don't apply to raw INSERT),
+        # so later ORM reads never hit a NULL.
+        await conn.execute(
+            text(
+                "INSERT INTO corporation (id, balance, total_tax, "
+                "total_interest_earned, total_interest_paid, total_penalties, "
+                "rules_url_rude, rules_url_strict, updated_at, deposits_reconciled) "
+                "VALUES (1, :b, 0, 0, 0, 0, '', '', :ts, 1)"
+            ),
+            {"b": total, "ts": int(time.time())},
+        )
+    else:
+        await conn.execute(
+            text(
+                "UPDATE corporation SET balance = balance + :b, "
+                "deposits_reconciled = 1 WHERE id = 1"
+            ),
+            {"b": total},
+        )
 
 
 async def dispose_engine() -> None:

@@ -30,7 +30,10 @@ from dataclasses import dataclass
 from repositories import bank as repo
 from repositories import events as E
 from repositories import players as players_repo
+from services import cooldown
 from services.global_settings import GlobalConfig, get_config_sync
+
+_LOAN_DENY_KEY = "loan_denied"
 
 DAY = 86400
 
@@ -74,8 +77,13 @@ def credit_multiplier(loans_repaid: int, loans_defaulted: int) -> float:
 
 
 def max_loan(size: int, loans_repaid: int, loans_defaulted: int, cfg: GlobalConfig) -> int:
-    base = size * cfg.loan_max_base_pct / 100
-    return max(0, int(base * credit_multiplier(loans_repaid, loans_defaulted)))
+    mult = credit_multiplier(loans_repaid, loans_defaulted)
+    base = int(size * cfg.loan_max_base_pct / 100 * mult)
+    # Even a broke (size 0) player gets a starter line, so newcomers can borrow —
+    # but a player who has burned the house (mult 0 via defaults) stays shut out.
+    if mult > 0:
+        return max(base, cfg.loan_min)
+    return max(0, base)
 
 
 def loan_interest_accrued(principal: int, full_days: int, cfg: GlobalConfig) -> int:
@@ -217,6 +225,8 @@ async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
             )
 
         await players_repo.set_player_fields(chat_id, user_id, size=player.size - amount)
+        # The principal joins the Corporation's till — that is the cash it lends out.
+        await repo.corp_apply(delta=amount)
         await E.log_event(
             chat_id, user_id, E.DEPOSIT_OPEN, delta=-amount, size_after=player.size - amount
         )
@@ -239,13 +249,21 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
         if matured:
             credited = w + accrued_share
             penalty = 0
+            # Principal leaves the till back to the depositor (the accrued part was
+            # already paid out of the till when it was earned). A drained till can
+            # go negative here — that is a bank run, i.e. the bankruptcy event.
+            await repo.corp_apply(delta=-w)
         else:
             penalty = (w * cfg.dep_early_penalty_pct + 99) // 100  # ceil
             credited = max(0, w - penalty)
-            # Forfeited interest + principal penalty both go to the house.
-            corp_take = penalty + accrued_share
-            if corp_take:
-                await repo.corp_apply(delta=corp_take, penalties=corp_take)
+            # Principal (minus the retained penalty) leaves the till; the forfeited,
+            # pre-paid interest is reclaimed by the house. Both penalty and forfeited
+            # interest count as house earnings.
+            await repo.corp_apply(
+                delta=accrued_share - (w - penalty),
+                penalties=penalty + accrued_share,
+            )
+            if penalty or accrued_share:
                 await E.log_event(
                     chat_id, user_id, E.DEPOSIT_PENALTY,
                     meta={"penalty": penalty, "forfeit_interest": accrued_share},
@@ -304,6 +322,10 @@ async def accrue_deposit_on_play(chat_id: int, user_id: int, today: str) -> int:
 
 async def take_loan(chat_id: int, user_id: int, amount: int) -> OpResult:
     cfg = get_config_sync()
+    # A credit-history rejection puts the applicant in the penalty box: they can't
+    # re-apply until the cooldown lapses (no spamming the till after a refusal).
+    if not cooldown.peek(chat_id, user_id, _LOAN_DENY_KEY, cfg.loan_deny_cooldown_sec):
+        raise BankError("loan_denied")
     async with players_repo.get_chat_lock(chat_id):
         existing = await repo.get_loan(chat_id, user_id)
         if existing is not None and (existing.principal > 0 or existing.accrued_interest > 0):
@@ -314,6 +336,7 @@ async def take_loan(chat_id: int, user_id: int, amount: int) -> OpResult:
         defaulted_n = player.loans_defaulted if player else 0
         credit_limit = max_loan(size, repaid, defaulted_n, cfg)
         if credit_limit < 1:
+            cooldown.touch(chat_id, user_id, _LOAN_DENY_KEY)
             raise BankError("no_credit")
         # The money comes out of the Corporation's till — it can't lend what it
         # doesn't have, and it never lends itself into the red.
@@ -484,7 +507,9 @@ async def roll_confiscation(dep, cfg: GlobalConfig, rng: random.Random | None = 
     if seized <= 0:
         return 0
     await repo.upsert_deposit(dep.chat_id, dep.user_id, principal=dep.principal - seized)
-    await repo.corp_apply(delta=seized, penalties=seized)
+    # The seized cash is already sitting in the till (deposits fund it). We only
+    # shrink the depositor's claim and book it as house earnings — no cash moves.
+    await repo.corp_apply(delta=0, penalties=seized)
     await E.log_event(
         dep.chat_id, dep.user_id, E.CONFISCATION, delta=-seized, meta={"seized": seized}
     )
