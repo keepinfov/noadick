@@ -45,13 +45,10 @@ async def _main_kb(uid: int) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text=texts.BTN_BANK_CORP, callback_data=f"bk:corp:{uid}")],
     ]
-    rules_row: list[InlineKeyboardButton] = []
     if corp.rules_url_rude:
-        rules_row.append(InlineKeyboardButton(text=texts.BTN_RULES_RUDE, url=corp.rules_url_rude))
+        rows.append([InlineKeyboardButton(text=texts.BTN_RULES_RUDE, url=corp.rules_url_rude)])
     if corp.rules_url_strict:
-        rules_row.append(InlineKeyboardButton(text=texts.BTN_RULES_STRICT, url=corp.rules_url_strict))
-    if rules_row:
-        rows.append(rules_row)
+        rows.append([InlineKeyboardButton(text=texts.BTN_RULES_STRICT, url=corp.rules_url_strict)])
     rows.append(
         [
             InlineKeyboardButton(text=texts.BTN_BANK_REFRESH, callback_data=f"bk:home:{uid}"),
@@ -64,16 +61,18 @@ async def _main_kb(uid: int) -> InlineKeyboardMarkup:
 def _dep_kb(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=texts.BTN_DEP_OPEN, callback_data=f"bk:noop:{uid}")],
             [
-                InlineKeyboardButton(text=f"{texts.BTN_DEP_OPEN} 25%", callback_data=f"bk:dopen:{uid}:25"),
-                InlineKeyboardButton(text=f"{texts.BTN_DEP_OPEN} 50%", callback_data=f"bk:dopen:{uid}:50"),
-                InlineKeyboardButton(text=f"{texts.BTN_DEP_OPEN} {texts.BTN_AMOUNT_ALL}", callback_data=f"bk:dopen:{uid}:all"),
+                InlineKeyboardButton(text="25%", callback_data=f"bk:dopen:{uid}:25"),
+                InlineKeyboardButton(text="50%", callback_data=f"bk:dopen:{uid}:50"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_ALL, callback_data=f"bk:dopen:{uid}:all"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_CUSTOM, callback_data=f"bk:dopenc:{uid}"),
             ],
-            [InlineKeyboardButton(text=f"{texts.BTN_DEP_OPEN} · {texts.BTN_AMOUNT_CUSTOM}", callback_data=f"bk:dopenc:{uid}")],
+            [InlineKeyboardButton(text=texts.BTN_DEP_WITHDRAW, callback_data=f"bk:noop:{uid}")],
             [
-                InlineKeyboardButton(text=f"{texts.BTN_DEP_WITHDRAW} 50%", callback_data=f"bk:dwd:{uid}:50"),
-                InlineKeyboardButton(text=f"{texts.BTN_DEP_WITHDRAW} {texts.BTN_AMOUNT_ALL}", callback_data=f"bk:dwd:{uid}:all"),
-                InlineKeyboardButton(text=f"{texts.BTN_DEP_WITHDRAW} · {texts.BTN_AMOUNT_CUSTOM}", callback_data=f"bk:dwdc:{uid}"),
+                InlineKeyboardButton(text="50%", callback_data=f"bk:dwd:{uid}:50"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_ALL, callback_data=f"bk:dwd:{uid}:all"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_CUSTOM, callback_data=f"bk:dwdc:{uid}"),
             ],
             [InlineKeyboardButton(text=texts.BTN_BANK_BACK, callback_data=f"bk:home:{uid}")],
         ]
@@ -83,15 +82,17 @@ def _dep_kb(uid: int) -> InlineKeyboardMarkup:
 def _loan_kb(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=texts.BTN_LOAN_TAKE, callback_data=f"bk:noop:{uid}")],
             [
-                InlineKeyboardButton(text=f"{texts.BTN_LOAN_TAKE} 50%", callback_data=f"bk:ltake:{uid}:50"),
-                InlineKeyboardButton(text=f"{texts.BTN_LOAN_TAKE} {texts.BTN_AMOUNT_ALL}", callback_data=f"bk:ltake:{uid}:all"),
-                InlineKeyboardButton(text=f"{texts.BTN_LOAN_TAKE} · {texts.BTN_AMOUNT_CUSTOM}", callback_data=f"bk:ltakec:{uid}"),
+                InlineKeyboardButton(text="50%", callback_data=f"bk:ltake:{uid}:50"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_ALL, callback_data=f"bk:ltake:{uid}:all"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_CUSTOM, callback_data=f"bk:ltakec:{uid}"),
             ],
+            [InlineKeyboardButton(text=texts.BTN_LOAN_REPAY, callback_data=f"bk:noop:{uid}")],
             [
-                InlineKeyboardButton(text=f"{texts.BTN_LOAN_REPAY} 50%", callback_data=f"bk:lrepay:{uid}:50"),
-                InlineKeyboardButton(text=f"{texts.BTN_LOAN_REPAY} {texts.BTN_AMOUNT_ALL}", callback_data=f"bk:lrepay:{uid}:all"),
-                InlineKeyboardButton(text=f"{texts.BTN_LOAN_REPAY} · {texts.BTN_AMOUNT_CUSTOM}", callback_data=f"bk:lrepayc:{uid}"),
+                InlineKeyboardButton(text="50%", callback_data=f"bk:lrepay:{uid}:50"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_ALL, callback_data=f"bk:lrepay:{uid}:all"),
+                InlineKeyboardButton(text=texts.BTN_AMOUNT_CUSTOM, callback_data=f"bk:lrepayc:{uid}"),
             ],
             [InlineKeyboardButton(text=texts.BTN_BANK_BACK, callback_data=f"bk:home:{uid}")],
         ]
@@ -181,6 +182,11 @@ async def _show_main(callback: CallbackQuery, chat_id: int, uid: int) -> None:
 # --------------------------------------------------------------------------- #
 # Navigation callbacks.
 # --------------------------------------------------------------------------- #
+
+
+@router.callback_query(F.data.startswith("bk:noop:"))
+async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("bk:home:"))
