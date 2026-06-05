@@ -39,14 +39,14 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "dep_rate_pct": "INTEGER DEFAULT 3",
         "dep_rate_decay_pct": "INTEGER DEFAULT 15",
         "dep_rate_floor_pct": "INTEGER DEFAULT 1",
-        "dep_yield_cap_pct": "INTEGER DEFAULT 50",
+        "dep_yield_cap_pct": "INTEGER DEFAULT 20",
         "dep_term_days": "INTEGER DEFAULT 7",
         "dep_early_penalty_pct": "INTEGER DEFAULT 30",
         "dep_confisc_chance_pct": "INTEGER DEFAULT 2",
         "dep_confisc_max_pct": "INTEGER DEFAULT 10",
         "loan_rate_pct": "INTEGER DEFAULT 5",
-        "loan_max_base_pct": "INTEGER DEFAULT 100",
-        "loan_min": "INTEGER DEFAULT 15",
+        "loan_max_base_pct": "INTEGER DEFAULT 50",
+        "loan_min": "INTEGER DEFAULT 5",
         "loan_term_days": "INTEGER DEFAULT 5",
         "loan_garnish_pct": "INTEGER DEFAULT 50",
         "loan_deny_cooldown_sec": "INTEGER DEFAULT 1800",
@@ -54,6 +54,14 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "collector_interval_sec": "INTEGER DEFAULT 3600",
         "reminder_cooldown_sec": "INTEGER DEFAULT 21600",
     },
+}
+
+# Columns that were once shipped and later removed from the models. create_all()
+# never drops columns, so a lingering NOT NULL column with no default breaks fresh
+# INSERTs (e.g. creating the settings row omits the unknown column). Drop them
+# idempotently on startup so old databases match the current schema.
+_DROPPED_COLUMNS: dict[str, list[str]] = {
+    "global_settings": ["cd_dick_repeat"],
 }
 
 _engine: AsyncEngine | None = None
@@ -95,6 +103,12 @@ async def init_db() -> None:
                     await conn.execute(
                         text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
                     )
+        for table, cols in _DROPPED_COLUMNS.items():
+            rows = await conn.execute(text(f"PRAGMA table_info({table})"))
+            existing = {row[1] for row in rows}
+            for col in cols:
+                if col in existing:
+                    await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {col}"))
         await _reconcile_deposits(conn)
 
 
