@@ -226,7 +226,8 @@ async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
 
         await players_repo.set_player_fields(chat_id, user_id, size=player.size - amount)
         # The principal joins the Corporation's till — that is the cash it lends out.
-        await repo.corp_apply(delta=amount)
+        async with repo.corp_lock():
+            await repo.corp_apply(delta=amount)
         await E.log_event(
             chat_id, user_id, E.DEPOSIT_OPEN, delta=-amount, size_after=player.size - amount
         )
@@ -252,17 +253,19 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
             # Principal leaves the till back to the depositor (the accrued part was
             # already paid out of the till when it was earned). A drained till can
             # go negative here — that is a bank run, i.e. the bankruptcy event.
-            await repo.corp_apply(delta=-w)
+            async with repo.corp_lock():
+                await repo.corp_apply(delta=-w)
         else:
             penalty = (w * cfg.dep_early_penalty_pct + 99) // 100  # ceil
             credited = max(0, w - penalty)
             # Principal (minus the retained penalty) leaves the till; the forfeited,
             # pre-paid interest is reclaimed by the house. Both penalty and forfeited
             # interest count as house earnings.
-            await repo.corp_apply(
-                delta=accrued_share - (w - penalty),
-                penalties=penalty + accrued_share,
-            )
+            async with repo.corp_lock():
+                await repo.corp_apply(
+                    delta=accrued_share - (w - penalty),
+                    penalties=penalty + accrued_share,
+                )
             if penalty or accrued_share:
                 await E.log_event(
                     chat_id, user_id, E.DEPOSIT_PENALTY,
@@ -298,19 +301,21 @@ async def accrue_deposit_on_play(chat_id: int, user_id: int, today: str) -> int:
     interest = deposit_day_interest(dep.principal, dep.accrued, dep.active_days_count, cfg)
     # The Corporation pays this out of its own till. A broke house pays nothing —
     # and we don't burn the active day, so the depositor can still earn once the
-    # till recovers. Interest is capped to whatever cash the Corporation has.
-    corp = await repo.get_corp()
-    interest = min(interest, max(0, corp.balance))
-    if interest <= 0:
-        return 0
-    await repo.upsert_deposit(
-        chat_id,
-        user_id,
-        accrued=dep.accrued + interest,
-        active_days_count=dep.active_days_count + 1,
-        last_accrual_day=today,
-    )
-    await repo.corp_apply(delta=-interest, interest_paid=interest)
+    # till recovers. Interest is capped to whatever cash the Corporation has. The
+    # corp lock keeps the cap check and the payout consistent across chats.
+    async with repo.corp_lock():
+        corp = await repo.get_corp()
+        interest = min(interest, max(0, corp.balance))
+        if interest <= 0:
+            return 0
+        await repo.upsert_deposit(
+            chat_id,
+            user_id,
+            accrued=dep.accrued + interest,
+            active_days_count=dep.active_days_count + 1,
+            last_accrual_day=today,
+        )
+        await repo.corp_apply(delta=-interest, interest_paid=interest)
     await E.log_event(chat_id, user_id, E.DEPOSIT_INTEREST, meta={"interest": interest})
     return interest
 
@@ -339,23 +344,25 @@ async def take_loan(chat_id: int, user_id: int, amount: int) -> OpResult:
             cooldown.touch(chat_id, user_id, _LOAN_DENY_KEY)
             raise BankError("no_credit")
         # The money comes out of the Corporation's till — it can't lend what it
-        # doesn't have, and it never lends itself into the red.
-        corp = await repo.get_corp()
-        available = max(0, corp.balance)
-        if available < 1:
-            raise BankError("corp_broke")
-        amount = max(1, min(amount, credit_limit, available))
+        # doesn't have, and it never lends itself into the red. Hold the corp lock
+        # across the read+debit so two chats can't both drain the same cash.
+        async with repo.corp_lock():
+            corp = await repo.get_corp()
+            available = max(0, corp.balance)
+            if available < 1:
+                raise BankError("corp_broke")
+            amount = max(1, min(amount, credit_limit, available))
 
-        now = _now()
-        await repo.upsert_loan(
-            chat_id, user_id,
-            principal=amount, accrued_interest=0, opened_at=now,
-            due_at=now + cfg.loan_term_days * DAY, last_accrual_at=now,
-            last_reminded_at=0, defaulted=False,
-        )
-        new_size = size + amount
-        await players_repo.set_player_fields(chat_id, user_id, size=new_size)
-        await repo.corp_apply(delta=-amount)  # cash leaves the vault into the borrower
+            now = _now()
+            await repo.upsert_loan(
+                chat_id, user_id,
+                principal=amount, accrued_interest=0, opened_at=now,
+                due_at=now + cfg.loan_term_days * DAY, last_accrual_at=now,
+                last_reminded_at=0, defaulted=False,
+            )
+            new_size = size + amount
+            await players_repo.set_player_fields(chat_id, user_id, size=new_size)
+            await repo.corp_apply(delta=-amount)  # cash leaves the vault into the borrower
         await E.log_event(
             chat_id, user_id, E.LOAN_OPEN, delta=amount, size_after=new_size,
             meta={"due_at": now + cfg.loan_term_days * DAY},
@@ -441,13 +448,13 @@ async def _garnish(chat_id: int, user_id: int, player_dict: dict, base: int, pct
     principal_part = take - interest_part
     player_dict["size"] = max(0, player_dict.get("size", 0) - take)
     # Recovered money flows back to the Corporation (principal + interest profit).
-    await repo.corp_apply(delta=take, interest_earned=interest_part)
+    async with repo.corp_lock():
+        await repo.corp_apply(delta=take, interest_earned=interest_part)
     remaining = debt - take
     if remaining <= 0:
+        # Forced recovery on a defaulted loan clears the debt but does NOT count as
+        # a clean repayment — only voluntary repay_loan improves credit history.
         await repo.delete_loan(chat_id, user_id)
-        player = await players_repo.get_player(chat_id, user_id)
-        repaid = (player.loans_repaid if player else 0) + 1
-        await players_repo.set_player_fields(chat_id, user_id, loans_repaid=repaid)
     else:
         await repo.upsert_loan(
             chat_id, user_id,

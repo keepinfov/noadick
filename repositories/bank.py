@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from db.engine import get_session_factory
 from db.models import Corporation, Deposit, Loan
 
 _CORP_ID = 1
+
+# The Corporation is a single global row shared by every chat, but the money ops
+# in services.bank are only guarded by per-chat locks. This process-wide lock
+# serialises the "read balance -> decide -> apply" critical sections so two chats
+# can't both lend out the same cash. Always acquired *after* a chat lock, so the
+# ordering is fixed (chat -> corp) and cannot deadlock.
+_CORP_LOCK = asyncio.Lock()
+
+
+def corp_lock() -> asyncio.Lock:
+    return _CORP_LOCK
 
 
 def _now() -> int:
@@ -47,14 +59,25 @@ async def corp_apply(
         if corp is None:
             corp = Corporation(id=_CORP_ID)
             session.add(corp)
-            await session.flush()  # apply column defaults before arithmetic
-        corp.balance += delta
-        corp.total_tax += tax
-        corp.total_interest_earned += interest_earned
-        corp.total_interest_paid += interest_paid
-        corp.total_penalties += penalties
+            await session.flush()  # materialise the row + column defaults
+        # Atomic in-DB increments: read-modify-write in Python would lose updates
+        # under concurrent calls (the corp is shared across all chats).
+        await session.execute(
+            update(Corporation)
+            .where(Corporation.id == _CORP_ID)
+            .values(
+                balance=Corporation.balance + delta,
+                total_tax=Corporation.total_tax + tax,
+                total_interest_earned=Corporation.total_interest_earned + interest_earned,
+                total_interest_paid=Corporation.total_interest_paid + interest_paid,
+                total_penalties=Corporation.total_penalties + penalties,
+            )
+        )
         await session.commit()
-        return corp.balance
+        new_balance = await session.scalar(
+            select(Corporation.balance).where(Corporation.id == _CORP_ID)
+        )
+        return int(new_balance or 0)
 
 
 async def set_rules_urls(rude: str, strict: str) -> None:

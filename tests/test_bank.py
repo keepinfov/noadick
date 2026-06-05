@@ -235,17 +235,17 @@ async def test_take_loan_needs_funded_corp(db):
     assert e.value.code == "corp_broke"
 
     await repo.corp_apply(delta=10_000)  # fund the till
-    res = await bank.take_loan(CHAT, USER, 1000)  # over credit limit → clamped to 100
-    assert res.amount == 100
+    res = await bank.take_loan(CHAT, USER, 1000)  # over credit limit (50% of 100) → 50
+    assert res.amount == 50
 
     from repositories import players as players_repo
 
     player = await players_repo.get_player(CHAT, USER)
-    assert player.size == 200  # 100 liquid + 100 borrowed
+    assert player.size == 150  # 100 liquid + 50 borrowed
     loan = await repo.get_loan(CHAT, USER)
-    assert loan.principal == 100
+    assert loan.principal == 50
     corp = await repo.get_corp()
-    assert corp.balance == 10_000 - 100  # cash left the vault
+    assert corp.balance == 10_000 - 50  # cash left the vault
 
     with pytest.raises(bank.BankError) as e:
         await bank.take_loan(CHAT, USER, 10)
@@ -268,9 +268,9 @@ async def test_repay_full_clears_and_bumps_history(db):
     from repositories import bank as repo
     from services import bank
 
-    await _seed_player(100)
+    await _seed_player(200)  # 50% credit limit → 100
     await repo.corp_apply(delta=100)  # fund the till exactly
-    await bank.take_loan(CHAT, USER, 100)  # size now 200, till now 0
+    await bank.take_loan(CHAT, USER, 100)  # size now 300, till now 0
     # Add some interest so we can check it routes to the Corporation.
     await repo.upsert_loan(CHAT, USER, accrued_interest=20)
 
@@ -282,7 +282,7 @@ async def test_repay_full_clears_and_bumps_history(db):
     from repositories import players as players_repo
 
     player = await players_repo.get_player(CHAT, USER)
-    assert player.size == 80  # 200 - 120
+    assert player.size == 180  # 300 - 120
     assert player.loans_repaid == 1
     corp = await repo.get_corp()
     assert corp.total_interest_earned == 20
@@ -307,6 +307,27 @@ async def test_garnish_only_when_defaulted(db):
     expected = (50 * c.loan_garnish_pct + 99) // 100
     assert taken == expected
     assert pdict["size"] == 100 - expected
+
+
+async def test_garnish_clearing_default_does_not_credit_history(db):
+    from repositories import bank as repo
+    from services import bank
+    from repositories import players as players_repo
+
+    await _seed_player(1000)
+    await repo.corp_apply(delta=100)
+    await bank.take_loan(CHAT, USER, 100)
+    await repo.upsert_loan(CHAT, USER, defaulted=True)
+
+    # A large gain garnishes enough to wipe the whole debt in one pass.
+    pdict = {"size": 1000}
+    taken = await bank.garnish_on_dict(CHAT, USER, pdict, 1000)
+    assert taken == 100  # full principal recovered
+    assert await repo.get_loan(CHAT, USER) is None  # debt cleared
+
+    player = await players_repo.get_player(CHAT, USER)
+    # Forced recovery on a default must NOT count as a clean repayment.
+    assert player.loans_repaid == 0
 
 
 async def test_roll_confiscation_deterministic(db):
