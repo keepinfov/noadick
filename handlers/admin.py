@@ -925,42 +925,54 @@ async def cb_stats(callback: CallbackQuery) -> None:
 # ---- global tunables panel (global admins only) ----
 
 
-def _render_tunables(title: str, editable, cfg, prefix: str) -> tuple[str, InlineKeyboardMarkup]:
-    """Render an editable-tunables panel. The (often long) field labels live in the
-    message body, where Telegram wraps them in full — on a phone a label baked into
-    a button just gets clipped with an ellipsis. Each keyboard row is tied to its
-    body line by a leading "<n>. <value>" chip, followed by the −/+ steps."""
-    lines: list[str] = []
+async def render_gset() -> tuple[str, InlineKeyboardMarkup]:
+    cfg = await get_config()
     rows: list[list[InlineKeyboardButton]] = []
-    for i, (key, label, small, big, _mn, _mx) in enumerate(editable, start=1):
+    for key, label, small, big, _mn, _mx in global_settings.EDITABLE:
         val = getattr(cfg, key)
-        lines.append(f"{i}. {label} — <b>{val}</b>")
         rows.append(
             [
-                InlineKeyboardButton(text=f"{i}. {val}", callback_data="adm:noop"),
-                InlineKeyboardButton(text=f"−{big}", callback_data=f"{prefix}:{key}:{-big}"),
-                InlineKeyboardButton(text=f"−{small}", callback_data=f"{prefix}:{key}:{-small}"),
-                InlineKeyboardButton(text=f"+{small}", callback_data=f"{prefix}:{key}:{small}"),
-                InlineKeyboardButton(text=f"+{big}", callback_data=f"{prefix}:{key}:{big}"),
+                InlineKeyboardButton(
+                    text=texts.gset_field_label(label, val), callback_data="adm:noop"
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"−{big}", callback_data=f"adm:gadj:{key}:{-big}"),
+                InlineKeyboardButton(text=f"−{small}", callback_data=f"adm:gadj:{key}:{-small}"),
+                InlineKeyboardButton(text=f"+{small}", callback_data=f"adm:gadj:{key}:{small}"),
+                InlineKeyboardButton(text=f"+{big}", callback_data=f"adm:gadj:{key}:{big}"),
             ]
         )
     rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
-    body = title + "\n\n" + "\n".join(lines)
-    return body, InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-async def render_gset() -> tuple[str, InlineKeyboardMarkup]:
-    cfg = await get_config()
-    return _render_tunables(texts.ADMIN_GSET_TITLE, global_settings.EDITABLE, cfg, "adm:gadj")
+    return texts.ADMIN_GSET_TITLE, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def render_gset_bank() -> tuple[str, InlineKeyboardMarkup]:
-    """Banking knobs on a separate panel so the combined button count stays under
-    Telegram's 100-button cap."""
+    """Same shape as render_gset but for the banking knobs, kept on a separate
+    panel so the combined button count stays under Telegram's 100-button cap."""
     cfg = await get_config()
-    return _render_tunables(
-        texts.ADMIN_GSET_BANK_TITLE, global_settings.EDITABLE_BANK, cfg, "adm:gadjb"
-    )
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, label, small, big, _mn, _mx in global_settings.EDITABLE_BANK:
+        val = getattr(cfg, key)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.gset_field_label(label, val), callback_data="adm:noop"
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"−{big}", callback_data=f"adm:gadjb:{key}:{-big}"),
+                InlineKeyboardButton(text=f"−{small}", callback_data=f"adm:gadjb:{key}:{-small}"),
+                InlineKeyboardButton(text=f"+{small}", callback_data=f"adm:gadjb:{key}:{small}"),
+                InlineKeyboardButton(text=f"+{big}", callback_data=f"adm:gadjb:{key}:{big}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
+    return texts.ADMIN_GSET_BANK_TITLE, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(F.data == "adm:gsetbank")
