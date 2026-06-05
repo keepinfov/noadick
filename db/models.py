@@ -113,6 +113,9 @@ class Deposit(Base):
     # actually plays /dick — passive deposits do not grow.
     active_days_count: Mapped[int] = mapped_column(Integer, default=0)
     last_accrual_day: Mapped[str] = mapped_column(String, default="")
+    # Calendar day (UTC, ISO) of the last confiscation roll, so the collector
+    # makes at most one attempt per day regardless of its run frequency.
+    last_confisc_day: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
@@ -236,14 +239,14 @@ class GlobalSettings(Base):
     dep_rate_pct: Mapped[int] = mapped_column(Integer, default=3)
     dep_rate_decay_pct: Mapped[int] = mapped_column(Integer, default=15)
     dep_rate_floor_pct: Mapped[int] = mapped_column(Integer, default=1)
-    dep_yield_cap_pct: Mapped[int] = mapped_column(Integer, default=50)
+    dep_yield_cap_pct: Mapped[int] = mapped_column(Integer, default=20)
     dep_term_days: Mapped[int] = mapped_column(Integer, default=7)
     dep_early_penalty_pct: Mapped[int] = mapped_column(Integer, default=30)
     dep_confisc_chance_pct: Mapped[int] = mapped_column(Integer, default=2)
     dep_confisc_max_pct: Mapped[int] = mapped_column(Integer, default=10)
     loan_rate_pct: Mapped[int] = mapped_column(Integer, default=5)
-    loan_max_base_pct: Mapped[int] = mapped_column(Integer, default=100)
-    loan_min: Mapped[int] = mapped_column(Integer, default=15)
+    loan_max_base_pct: Mapped[int] = mapped_column(Integer, default=50)
+    loan_min: Mapped[int] = mapped_column(Integer, default=5)
     loan_term_days: Mapped[int] = mapped_column(Integer, default=5)
     loan_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
     loan_deny_cooldown_sec: Mapped[int] = mapped_column(Integer, default=1800)

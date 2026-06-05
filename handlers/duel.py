@@ -388,10 +388,6 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
             base_chance,
         )
 
-        corp_tax = int(stake * random.uniform(0.30, 0.40))
-        winner_profit = max(1, stake - corp_tax)
-        corp_tax = stake - winner_profit
-
         if winner_is_attacker:
             loser_key = d_str
             winner_key = a_str
@@ -401,6 +397,18 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
 
         loser = storage[loser_key]
         winner = storage[winner_key]
+
+        # The stake was clamped to the loser's size when the duel was issued, but
+        # their size can shrink before acceptance (another duel, garnishment). Re-clamp
+        # to the live size on commit so the winner can never mint more than the loser
+        # actually loses.
+        stake = max(0, min(stake, loser["size"]))
+        if stake <= 0:
+            corp_tax = winner_profit = 0
+        else:
+            corp_tax = int(stake * random.uniform(0.30, 0.40))
+            winner_profit = max(1, stake - corp_tax)
+            corp_tax = stake - winner_profit
 
         loser["size"] = max(0, loser["size"] - stake)
         winner["size"] += winner_profit

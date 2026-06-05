@@ -26,6 +26,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from repositories import bank as repo
 from repositories import events as E
@@ -64,7 +65,12 @@ def deposit_day_interest(
     """Interest to credit for one active day, respecting the total yield cap."""
     if principal <= 0:
         return 0
-    raw = int(principal * effective_deposit_rate(active_days_count, cfg))
+    rate = effective_deposit_rate(active_days_count, cfg)
+    raw = int(principal * rate)
+    # A small principal can truncate to 0 even at a positive rate. As long as the
+    # yield cap leaves headroom, pay a floor of 1 so small deposits aren't pointless.
+    if raw == 0 and rate > 0:
+        raw = 1
     cap_total = principal * cfg.dep_yield_cap_pct // 100
     headroom = max(0, cap_total - accrued)
     return max(0, min(raw, headroom))
@@ -477,6 +483,10 @@ async def accrue_loan_interest(loan, cfg: GlobalConfig, now: int) -> int:
     """Grow the debt by whole calendar days elapsed since the last accrual.
     Advances ``last_accrual_at`` only by consumed full days (small principals do
     not silently lose interest to truncation)."""
+    # A defaulted debt is frozen: once the loan defaults the balance stops growing,
+    # so it can't spiral beyond what garnishment/deposit recovery can ever clear.
+    if loan.defaulted:
+        return 0
     full_days = (now - loan.last_accrual_at) // DAY
     if full_days <= 0:
         return 0
@@ -501,19 +511,83 @@ async def mark_default(loan) -> None:
     await E.log_event(loan.chat_id, loan.user_id, E.LOAN_DEFAULT)
 
 
-async def roll_confiscation(dep, cfg: GlobalConfig, rng: random.Random | None = None) -> int:
+async def recover_from_deposit(loan) -> int:
+    """A deposit is not a shelter from a defaulted debt: pull the owed amount out of
+    the debtor's own deposit principal. Returns the amount recovered (0 if none).
+
+    The deposit principal already sits in the Corporation's till (it funded it on
+    open), so no cash moves — we only shrink the depositor's claim and the debt, and
+    book the interest slice as house earnings (the same no-cash-move pattern as
+    confiscation). Forced recovery does NOT improve credit history."""
+    if not loan.defaulted:
+        return 0
+    debt = loan.principal + loan.accrued_interest
+    if debt <= 0:
+        return 0
+    dep = await repo.get_deposit(loan.chat_id, loan.user_id)
+    if dep is None or dep.principal <= 0:
+        return 0
+    take = min(debt, dep.principal)
+    if take <= 0:
+        return 0
+    interest_part = min(take, loan.accrued_interest)
+    principal_part = take - interest_part
+
+    rem_dep = dep.principal - take
+    if rem_dep <= 0:
+        await repo.delete_deposit(loan.chat_id, loan.user_id)
+    else:
+        await repo.upsert_deposit(loan.chat_id, loan.user_id, principal=rem_dep)
+    # Cash already in the till; only book the interest slice as earnings.
+    async with repo.corp_lock():
+        await repo.corp_apply(delta=0, interest_earned=interest_part)
+
+    remaining = debt - take
+    if remaining <= 0:
+        await repo.delete_loan(loan.chat_id, loan.user_id)
+    else:
+        await repo.upsert_loan(
+            loan.chat_id, loan.user_id,
+            accrued_interest=loan.accrued_interest - interest_part,
+            principal=loan.principal - principal_part,
+        )
+    await E.log_event(
+        loan.chat_id, loan.user_id, E.LOAN_GARNISH, delta=-take,
+        meta={"cleared": remaining <= 0, "from_deposit": True},
+    )
+    return take
+
+
+async def roll_confiscation(
+    dep, cfg: GlobalConfig, today: str = "", rng: random.Random | None = None
+) -> int:
     """With probability ``dep_confisc_chance_pct`` seize up to ``dep_confisc_max_pct``
-    of the principal for the Corporation. Returns the seized amount (0 if none)."""
+    of the principal for the Corporation. Returns the seized amount (0 if none).
+
+    ``today`` (UTC ISO date) gates the roll to at most one attempt per calendar day
+    so the chance is per-day, not per-collector-run (the loop can fire hourly)."""
     if dep.principal <= 0 or cfg.dep_confisc_chance_pct <= 0:
         return 0
+    if today and dep.last_confisc_day == today:
+        return 0
     r = rng or random
-    if r.random() >= cfg.dep_confisc_chance_pct / 100:
+    fired = r.random() < cfg.dep_confisc_chance_pct / 100
+    # Mark the day as rolled whether or not it fired, so a missed roll isn't
+    # retried on the next run within the same day.
+    if today and not fired:
+        await repo.upsert_deposit(dep.chat_id, dep.user_id, last_confisc_day=today)
+        return 0
+    if not fired:
         return 0
     frac = r.uniform(0, cfg.dep_confisc_max_pct / 100)
     seized = int(dep.principal * frac)
     if seized <= 0:
+        if today:
+            await repo.upsert_deposit(dep.chat_id, dep.user_id, last_confisc_day=today)
         return 0
-    await repo.upsert_deposit(dep.chat_id, dep.user_id, principal=dep.principal - seized)
+    await repo.upsert_deposit(
+        dep.chat_id, dep.user_id, principal=dep.principal - seized, last_confisc_day=today
+    )
     # The seized cash is already sitting in the till (deposits fund it). We only
     # shrink the depositor's claim and book it as house earnings — no cash moves.
     await repo.corp_apply(delta=0, penalties=seized)
@@ -568,6 +642,7 @@ async def run_collector_pass(bot) -> None:
     roll deposit confiscations. Each step is best-effort and independent."""
     cfg = get_config_sync()
     now = _now()
+    today = datetime.now(timezone.utc).date().isoformat()
 
     for loan in await repo.all_loans():
         if loan.principal <= 0 and loan.accrued_interest <= 0:
@@ -580,8 +655,12 @@ async def run_collector_pass(bot) -> None:
             await mark_default(fresh)
             fresh = await repo.get_loan(loan.chat_id, loan.user_id)
         if fresh is not None and fresh.defaulted:
-            await _maybe_remind(bot, fresh, cfg, now)
+            # Pull from the debtor's deposit first, then nag about whatever remains.
+            await recover_from_deposit(fresh)
+            fresh = await repo.get_loan(loan.chat_id, loan.user_id)
+            if fresh is not None:
+                await _maybe_remind(bot, fresh, cfg, now)
 
     for dep in await repo.all_deposits():
         if dep.principal > 0:
-            await roll_confiscation(dep, cfg)
+            await roll_confiscation(dep, cfg, today)

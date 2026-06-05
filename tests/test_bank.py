@@ -52,6 +52,19 @@ def test_deposit_day_interest_respects_cap():
     assert bank.deposit_day_interest(0, 0, 0, c) == 0
 
 
+def test_deposit_day_interest_floor_for_small_principal():
+    from services import bank
+
+    c = cfg()
+    # A tiny deposit truncates raw interest to 0 (10 * 3% = 0.3 -> 0) but the floor
+    # pays 1 as long as the yield cap leaves headroom.
+    assert int(10 * c.dep_rate_pct / 100) == 0  # would truncate without the floor
+    assert bank.deposit_day_interest(10, 0, 0, c) == 1
+    # ...but the floor never breaches the cap: at the cap there is no headroom.
+    cap_total = 10 * c.dep_yield_cap_pct // 100
+    assert bank.deposit_day_interest(10, cap_total, 0, c) == 0
+
+
 def test_credit_multiplier_clamped():
     from services import bank
 
@@ -328,6 +341,118 @@ async def test_garnish_clearing_default_does_not_credit_history(db):
     player = await players_repo.get_player(CHAT, USER)
     # Forced recovery on a default must NOT count as a clean repayment.
     assert player.loans_repaid == 0
+
+
+async def test_accrue_loan_interest_frozen_on_default(db):
+    from repositories import bank as repo
+    from services import bank
+
+    c = cfg()
+    now = 1_000_000
+    await repo.upsert_loan(
+        CHAT, USER, principal=100, accrued_interest=0,
+        last_accrual_at=now - 10 * bank.DAY, defaulted=True,
+    )
+    loan = await repo.get_loan(CHAT, USER)
+    # A defaulted debt is frozen: no further interest accrues.
+    grew = await bank.accrue_loan_interest(loan, c, now)
+    assert grew == 0
+    after = await repo.get_loan(CHAT, USER)
+    assert after.accrued_interest == 0
+
+
+async def test_recover_from_deposit_pays_debt_from_principal(db):
+    from repositories import bank as repo
+    from services import bank
+    from repositories import players as players_repo
+
+    await _seed_player(1000)
+    await bank.open_deposit(CHAT, USER, 400)  # principal funds the till; size now 600
+    await bank.take_loan(CHAT, USER, 100)  # 50% of 600 credit limit covers 100
+    await repo.upsert_loan(CHAT, USER, accrued_interest=20, defaulted=True)
+
+    corp_before = (await repo.get_corp()).balance
+    loan = await repo.get_loan(CHAT, USER)
+    recovered = await bank.recover_from_deposit(loan)
+    assert recovered == 120  # full debt (100 principal + 20 interest)
+
+    # Debt cleared, but forced recovery does NOT credit credit history.
+    assert await repo.get_loan(CHAT, USER) is None
+    player = await players_repo.get_player(CHAT, USER)
+    assert player.loans_repaid == 0
+
+    dep = await repo.get_deposit(CHAT, USER)
+    assert dep.principal == 400 - 120  # pulled out of the deposit body
+
+    corp = await repo.get_corp()
+    # Cash already sat in the till — no movement, only the interest slice booked.
+    assert corp.balance == corp_before
+    assert corp.total_interest_earned == 20
+
+
+async def test_recover_from_deposit_noop_without_default(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(1000)
+    await bank.open_deposit(CHAT, USER, 1000)
+    await repo.corp_apply(delta=100)
+    await bank.take_loan(CHAT, USER, 100)  # not defaulted
+
+    loan = await repo.get_loan(CHAT, USER)
+    assert await bank.recover_from_deposit(loan) == 0
+    dep = await repo.get_deposit(CHAT, USER)
+    assert dep.principal == 1000  # untouched
+
+
+async def test_confiscation_once_per_day(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(1000)
+    await bank.open_deposit(CHAT, USER, 1000)
+    dep = await repo.get_deposit(CHAT, USER)
+
+    class _Rng:
+        def random(self):
+            return 0.0  # always below chance → fire
+
+        def uniform(self, a, b):
+            return b
+
+    seized = await bank.roll_confiscation(dep, cfg(), "2026-06-05", rng=_Rng())
+    assert seized > 0
+    dep = await repo.get_deposit(CHAT, USER)
+    assert dep.last_confisc_day == "2026-06-05"
+
+    # A second roll the same day is a no-op regardless of the rng.
+    again = await bank.roll_confiscation(dep, cfg(), "2026-06-05", rng=_Rng())
+    assert again == 0
+    # ...but the next day can fire again.
+    next_day = await bank.roll_confiscation(dep, cfg(), "2026-06-06", rng=_Rng())
+    assert next_day > 0
+
+
+async def test_confiscation_miss_still_marks_day(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(1000)
+    await bank.open_deposit(CHAT, USER, 1000)
+    dep = await repo.get_deposit(CHAT, USER)
+
+    class _NeverRng:
+        def random(self):
+            return 1.0  # above chance → miss
+
+        def uniform(self, a, b):
+            return b
+
+    seized = await bank.roll_confiscation(dep, cfg(), "2026-06-05", rng=_NeverRng())
+    assert seized == 0
+    dep = await repo.get_deposit(CHAT, USER)
+    # A missed roll still consumes the day, so the collector won't retry within it.
+    assert dep.last_confisc_day == "2026-06-05"
 
 
 async def test_roll_confiscation_deterministic(db):

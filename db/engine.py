@@ -32,6 +32,9 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     "corporation": {
         "deposits_reconciled": "INTEGER DEFAULT 0",
     },
+    "deposits": {
+        "last_confisc_day": "TEXT DEFAULT ''",
+    },
     "global_settings": {
         "dep_rate_pct": "INTEGER DEFAULT 3",
         "dep_rate_decay_pct": "INTEGER DEFAULT 15",
