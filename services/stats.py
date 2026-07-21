@@ -208,7 +208,25 @@ async def compute_global_profile(user_id: int, name: str | None = None) -> Globa
 
 
 async def size_timeline(chat_id: int, user_id: int) -> list[tuple[int, int]]:
-    evs = await E.get_events(chat_id, user_id)
+    # Banking bookkeeping events without a liquid-size snapshot historically
+    # stored the default size_after=0. Restrict the chart to events that really
+    # carry a post-operation liquid balance, including the health reform.
+    evs = await E.get_events(
+        chat_id,
+        user_id,
+        types=[
+            E.BASELINE,
+            E.DICK,
+            E.DUEL,
+            E.ADMIN_ADJUST,
+            E.DEPOSIT_OPEN,
+            E.DEPOSIT_WITHDRAW,
+            E.LOAN_OPEN,
+            E.LOAN_REPAY,
+            E.LOAN_GARNISH,
+            E.HEALTH_REFORM,
+        ],
+    )
     return [(e.created_at, e.size_after) for e in evs]
 
 

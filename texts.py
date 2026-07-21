@@ -537,6 +537,7 @@ def gset_field_label(label: str, value: int) -> str:
 # ---- per-chat local bans (global panel) ----
 
 BTN_LOCAL_BANS = "🚫 Локальные баны"
+BTN_HEALTH_REFORM = "🥦 ЗОЖ-реформа"
 ADMIN_NO_LOCAL_BANS = "В этом чате нет локально забаненных игроков."
 
 
@@ -750,6 +751,57 @@ def admin_confirm_reset_chat(title: str) -> str:
     return f"🧨 Сбросить весь чат «{title}»? Все игроки обнулятся. Действие необратимо."
 
 
+def admin_health_reform_preview(title: str, result) -> str:
+    if result.already_applied:
+        return (
+            f"🥦 <b>ЗОЖ-реформа · {html.escape(title)}</b>\n\n"
+            "Комиссия тут уже всё обрезала. Второй секатор этому чату не положен.\n\n"
+            f"Было: <b>{result.total_before}</b> см\n"
+            f"Осталось: <b>{result.total_after}</b> см\n"
+            f"Срезано: <b>{result.total_cut}</b> см"
+        )
+    return (
+        f"🥦 <b>ЗОЖ-реформа · {html.escape(title)}</b>\n\n"
+        "Комиссия объявит всё сверх 50 см не длиной, а запущенным жировым "
+        "наростом. Срез пойдёт по ступеням 15% / 25% / 35% и заденет руки, "
+        "тело вклада и накопленные проценты.\n\n"
+        f"Зажиревших: <b>{result.affected_players}</b>\n"
+        f"Общий размер: <b>{result.total_before}</b> → <b>{result.total_after}</b> см\n"
+        f"Под секатор: <b>{result.total_cut}</b> см\n\n"
+        "Запуск для этого чата возможен только один раз. Начать сушку?"
+    )
+
+
+def health_reform_announcement(result) -> str:
+    lines = [
+        "🥦 <b>ЗОЖ-РЕФОРМА КОРПОРАЦИИ</b>",
+        "",
+        "Комиссия наконец выяснила: всё, что у вас торчит сверх санитарной "
+        "нормы, — не длина, а запущенный жировой нарост. Лишнее пустили под "
+        "корпоративный секатор.",
+        "",
+        f"Осмотрено зажиревших туш: <b>{result.affected_players}</b>.",
+        f"Срезано сала: <b>{result.total_cut}</b> см.",
+    ]
+    if result.entries:
+        lines += ["", "<b>Сильнее всех заплыли:</b>"]
+        for i, entry in enumerate(result.entries[:10], 1):
+            lines.append(
+                f"{i}. {html.escape(entry.name)} — −{entry.cut} см "
+                f"({entry.before} → {entry.after})"
+            )
+        hidden = len(result.entries) - 10
+        if hidden > 0:
+            lines.append(f"…и ещё {hidden} оздоровленных молча собирают обрезки.")
+    lines += ["", "Не благодарите. Теперь вы не короткие — вы оздоровленные."]
+    return "\n".join(lines)
+
+
+def admin_health_reform_done(result, announced: bool) -> str:
+    suffix = "Акт отправлен в чат." if announced else "Акт в чат не доставлен."
+    return f"Сушка окончена: −{result.total_cut} см. {suffix}"
+
+
 def admin_ask_ban_user_reason(name: str, user_id: int) -> str:
     return f"🚫 За что забанить пользователя {name} (id {user_id})? Выбери причину:"
 
@@ -928,14 +980,17 @@ def bank_screen(s) -> str:
         d = s.deposit
         status = "🔓 созрел" if d.matured else f"🔒 до созревания {_dur(d.matures_at - _now_ts())}"
         lines.append(
-            f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} %) · {status}"
+            f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} см) · {status}"
         )
     else:
         lines.append("💰 Вклад: голяк. Деньги от тебя шарахаются, нищук.")
     if s.loan:
         ln = s.loan
         flag = "❗️ПРОСРОЧКА" if ln.defaulted else f"до сдачи {_dur(ln.due_at - _now_ts())}"
-        lines.append(f"🏦 Долг: <b>{ln.debt}</b> ({ln.principal}+{ln.interest}%) · {flag}")
+        lines.append(
+            f"🏦 Долг: <b>{ln.debt}</b> "
+            f"({ln.principal} тело + {ln.interest} проценты) · {flag}"
+        )
     else:
         lines.append("🏦 Долг: чисто. Пока никому не должен, везунчик.")
     lines.append(f"📈 Кредитный рейтинг: +{s.loans_repaid} / −{s.loans_defaulted}")
@@ -960,7 +1015,7 @@ def bank_dep_screen(s) -> str:
         ]
     else:
         lines.append("Вклада нет. Жмёшься, как последний скряга.")
-    lines += ["", f"На руках: {s.size}", "", "⚠️ Процент капает только в дни, когда ты тыкаешь /dick, потом затухает и упирается в потолок. Закинул и залёг на дно — так и сдохнешь нищим."]
+    lines += ["", f"На руках: {s.size}", "", "⚠️ Процент капает только в дни, когда ты тыкаешь /dick, потом быстро дохнет и упирается в потолок Корпорации. Дробная мелочь копится честно, но халявного +1 больше нет."]
     return "\n".join(lines)
 
 
@@ -1010,7 +1065,7 @@ BANK_ERR = {
 
 
 def dep_opened(amount: int) -> str:
-    return f"💰 Заморозил <b>{amount}</b> во вкладе. В /top тебя теперь не видать, в дуэли это не сунешь. Сиди, труси над процентами, жмот."
+    return f"💰 Заморозил <b>{amount}</b> во вкладе. Этот кусок спрятался из /top и в дуэль не полезет. Сиди, труси над процентами, жмот."
 
 
 def dep_withdrawn(amount: int, penalty: int) -> str:
@@ -1045,7 +1100,7 @@ def collector_reminder(debt: int, overdue_for: int) -> str:
     return (
         f"📨 <b>Письмо от Корпорации</b>\n\n"
         f"Слышь, должник. За тобой <b>{debt}</b>, и просрочка уже {_dur(overdue_for)}. "
-        f"Долг с каждым днём жиреет, а мы тихонько режем твои /dick и победы. "
+        f"Долг мы заморозили, зато теперь тихонько режем твои /dick и победы. "
         f"Тащи бабки через /bank, пока мы добрые — а добрые мы недолго."
     )
 

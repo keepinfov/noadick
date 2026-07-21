@@ -25,6 +25,7 @@ LOAN_INTEREST = "loan_interest"
 LOAN_GARNISH = "loan_garnish"
 LOAN_DEFAULT = "loan_default"
 CORP_TAX = "corp_tax"
+HEALTH_REFORM = "health_reform"
 
 
 async def log_event(

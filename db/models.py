@@ -113,6 +113,10 @@ class Deposit(Base):
     # actually plays /dick — passive deposits do not grow.
     active_days_count: Mapped[int] = mapped_column(Integer, default=0)
     last_accrual_day: Mapped[str] = mapped_column(String, default="")
+    # Fractional interest carried between active days in millionths of one
+    # size unit. This keeps tiny deposits proportional without minting a free
+    # minimum +1 on every accrual.
+    interest_remainder_ppm: Mapped[int] = mapped_column(Integer, default=0)
     # Calendar day (UTC, ISO) of the last confiscation roll, so the collector
     # makes at most one attempt per day regardless of its run frequency.
     last_confisc_day: Mapped[str] = mapped_column(String, default="")
@@ -149,6 +153,21 @@ class AuditLog(Base):
     target_chat: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     target_user: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class EconomyReform(Base):
+    """One applied, versioned economy event per chat."""
+
+    __tablename__ = "economy_reforms"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    reform_key: Mapped[str] = mapped_column(String, primary_key=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    affected_players: Mapped[int] = mapped_column(Integer, default=0)
+    total_before: Mapped[int] = mapped_column(Integer, default=0)
+    total_after: Mapped[int] = mapped_column(Integer, default=0)
+    total_cut: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
 
 
@@ -236,18 +255,18 @@ class GlobalSettings(Base):
     active_days: Mapped[int] = mapped_column(Integer, default=30)
     page_size: Mapped[int] = mapped_column(Integer, default=8)
     # Banking knobs (deposits / loans / collector). See services/global_settings.
-    dep_rate_pct: Mapped[int] = mapped_column(Integer, default=3)
-    dep_rate_decay_pct: Mapped[int] = mapped_column(Integer, default=15)
-    dep_rate_floor_pct: Mapped[int] = mapped_column(Integer, default=1)
-    dep_yield_cap_pct: Mapped[int] = mapped_column(Integer, default=20)
+    dep_rate_pct: Mapped[int] = mapped_column(Integer, default=2)
+    dep_rate_decay_pct: Mapped[int] = mapped_column(Integer, default=25)
+    dep_rate_floor_pct: Mapped[int] = mapped_column(Integer, default=0)
+    dep_yield_cap_pct: Mapped[int] = mapped_column(Integer, default=8)
     dep_term_days: Mapped[int] = mapped_column(Integer, default=7)
     dep_early_penalty_pct: Mapped[int] = mapped_column(Integer, default=30)
     dep_confisc_chance_pct: Mapped[int] = mapped_column(Integer, default=2)
     dep_confisc_max_pct: Mapped[int] = mapped_column(Integer, default=10)
-    loan_rate_pct: Mapped[int] = mapped_column(Integer, default=5)
+    loan_rate_pct: Mapped[int] = mapped_column(Integer, default=2)
     loan_max_base_pct: Mapped[int] = mapped_column(Integer, default=50)
-    loan_min: Mapped[int] = mapped_column(Integer, default=5)
-    loan_term_days: Mapped[int] = mapped_column(Integer, default=5)
+    loan_min: Mapped[int] = mapped_column(Integer, default=15)
+    loan_term_days: Mapped[int] = mapped_column(Integer, default=7)
     loan_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
     loan_deny_cooldown_sec: Mapped[int] = mapped_column(Integer, default=1800)
     loan_duel_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)

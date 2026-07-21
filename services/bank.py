@@ -9,10 +9,11 @@ Money rules (kept deliberately simple but internally consistent):
   so "deposit and forget" never pays off. Early withdrawal forfeits accrued
   interest and pays a penalty to the Corporation; deposits can also be randomly
   (partially) confiscated by the Corporation.
-* Loan principal is **minted** into liquid ``size`` immediately and burned on
-  repayment (net-zero). Interest grows the debt by calendar time and, when repaid
-  or garnished, becomes Corporation income. Past the due date the loan defaults and
-  is recovered by garnishing /dick gains and duel winnings.
+* Loan principal leaves the Corporation till and becomes liquid ``size``. A
+  repayment refills the till; its interest slice is house profit. Interest grows
+  the debt by calendar time and, when repaid or garnished, becomes Corporation
+  income. Past the due date the loan defaults and is recovered by garnishing
+  /dick gains and duel winnings.
 * The Corporation is the single global house account. It may go negative — that is
   the bankruptcy state, shown (with crude flavour) in /corp.
 
@@ -37,6 +38,7 @@ from services.global_settings import GlobalConfig, get_config_sync
 _LOAN_DENY_KEY = "loan_denied"
 
 DAY = 86400
+PPM = 1_000_000
 
 
 def _now() -> int:
@@ -62,18 +64,37 @@ def effective_deposit_rate(active_days_count: int, cfg: GlobalConfig) -> float:
 def deposit_day_interest(
     principal: int, accrued: int, active_days_count: int, cfg: GlobalConfig
 ) -> int:
-    """Interest to credit for one active day, respecting the total yield cap."""
+    """Whole-unit interest for one active day, without fractional carry."""
+    interest, _ = deposit_day_credit(principal, accrued, active_days_count, 0, cfg)
+    return interest
+
+
+def deposit_day_credit(
+    principal: int,
+    accrued: int,
+    active_days_count: int,
+    remainder_ppm: int,
+    cfg: GlobalConfig,
+) -> tuple[int, int]:
+    """Return ``(whole interest, fractional remainder)`` for one active day.
+
+    The remainder is stored in millionths of one size unit. Carrying it forward
+    makes small deposits proportional while avoiding the old guaranteed +1.
+    """
     if principal <= 0:
-        return 0
+        return 0, 0
     rate = effective_deposit_rate(active_days_count, cfg)
-    raw = int(principal * rate)
-    # A small principal can truncate to 0 even at a positive rate. As long as the
-    # yield cap leaves headroom, pay a floor of 1 so small deposits aren't pointless.
-    if raw == 0 and rate > 0:
-        raw = 1
     cap_total = principal * cfg.dep_yield_cap_pct // 100
     headroom = max(0, cap_total - accrued)
-    return max(0, min(raw, headroom))
+    if headroom <= 0:
+        return 0, 0
+    rate_ppm = max(0, int(rate * PPM))
+    units = principal * rate_ppm + max(0, remainder_ppm)
+    whole, remainder = divmod(units, PPM)
+    interest = max(0, min(whole, headroom))
+    if interest >= headroom:
+        remainder = 0
+    return interest, remainder
 
 
 def credit_multiplier(loans_repaid: int, loans_defaulted: int) -> float:
@@ -228,6 +249,7 @@ async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
                 matures_at=matures_at,
                 active_days_count=0,
                 last_accrual_day="",
+                interest_remainder_ppm=0,
             )
 
         await players_repo.set_player_fields(chat_id, user_id, size=player.size - amount)
@@ -280,6 +302,10 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
 
         rem_principal = dep.principal - w
         rem_accrued = dep.accrued - accrued_share
+        rem_remainder = (
+            dep.interest_remainder_ppm * rem_principal // dep.principal
+            if dep.principal else 0
+        )
         player = await players_repo.get_player(chat_id, user_id)
         new_size = (player.size if player else 0) + credited
         await players_repo.set_player_fields(chat_id, user_id, size=new_size)
@@ -288,7 +314,10 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
             await repo.delete_deposit(chat_id, user_id)
         else:
             await repo.upsert_deposit(
-                chat_id, user_id, principal=rem_principal, accrued=max(0, rem_accrued)
+                chat_id, user_id,
+                principal=rem_principal,
+                accrued=max(0, rem_accrued),
+                interest_remainder_ppm=max(0, rem_remainder),
             )
 
         await E.log_event(
@@ -304,25 +333,41 @@ async def accrue_deposit_on_play(chat_id: int, user_id: int, today: str) -> int:
     dep = await repo.get_deposit(chat_id, user_id)
     if dep is None or dep.principal <= 0 or dep.last_accrual_day == today:
         return 0
-    interest = deposit_day_interest(dep.principal, dep.accrued, dep.active_days_count, cfg)
+    interest, remainder = deposit_day_credit(
+        dep.principal,
+        dep.accrued,
+        dep.active_days_count,
+        dep.interest_remainder_ppm,
+        cfg,
+    )
+    cap_total = dep.principal * cfg.dep_yield_cap_pct // 100
+    if dep.accrued >= cap_total:
+        return 0
     # The Corporation pays this out of its own till. A broke house pays nothing —
     # and we don't burn the active day, so the depositor can still earn once the
     # till recovers. Interest is capped to whatever cash the Corporation has. The
     # corp lock keeps the cap check and the payout consistent across chats.
     async with repo.corp_lock():
         corp = await repo.get_corp()
-        interest = min(interest, max(0, corp.balance))
-        if interest <= 0:
+        available = max(0, corp.balance)
+        if interest > 0 and available <= 0:
             return 0
+        owed = interest
+        interest = min(interest, available)
+        if interest < owed:
+            remainder += (owed - interest) * PPM
         await repo.upsert_deposit(
             chat_id,
             user_id,
             accrued=dep.accrued + interest,
             active_days_count=dep.active_days_count + 1,
             last_accrual_day=today,
+            interest_remainder_ppm=remainder,
         )
-        await repo.corp_apply(delta=-interest, interest_paid=interest)
-    await E.log_event(chat_id, user_id, E.DEPOSIT_INTEREST, meta={"interest": interest})
+        if interest:
+            await repo.corp_apply(delta=-interest, interest_paid=interest)
+    if interest:
+        await E.log_event(chat_id, user_id, E.DEPOSIT_INTEREST, meta={"interest": interest})
     return interest
 
 
@@ -537,7 +582,14 @@ async def recover_from_deposit(loan) -> int:
     if rem_dep <= 0:
         await repo.delete_deposit(loan.chat_id, loan.user_id)
     else:
-        await repo.upsert_deposit(loan.chat_id, loan.user_id, principal=rem_dep)
+        await repo.upsert_deposit(
+            loan.chat_id,
+            loan.user_id,
+            principal=rem_dep,
+            interest_remainder_ppm=(
+                dep.interest_remainder_ppm * rem_dep // dep.principal
+            ),
+        )
     # Cash already in the till; only book the interest slice as earnings.
     async with repo.corp_lock():
         await repo.corp_apply(delta=0, interest_earned=interest_part)
@@ -585,8 +637,15 @@ async def roll_confiscation(
         if today:
             await repo.upsert_deposit(dep.chat_id, dep.user_id, last_confisc_day=today)
         return 0
+    rem_principal = dep.principal - seized
     await repo.upsert_deposit(
-        dep.chat_id, dep.user_id, principal=dep.principal - seized, last_confisc_day=today
+        dep.chat_id,
+        dep.user_id,
+        principal=rem_principal,
+        interest_remainder_ppm=(
+            dep.interest_remainder_ppm * rem_principal // dep.principal
+        ),
+        last_confisc_day=today,
     )
     # The seized cash is already sitting in the till (deposits fund it). We only
     # shrink the depositor's claim and book it as house earnings — no cash moves.
@@ -645,22 +704,26 @@ async def run_collector_pass(bot) -> None:
     today = datetime.now(timezone.utc).date().isoformat()
 
     for loan in await repo.all_loans():
-        if loan.principal <= 0 and loan.accrued_interest <= 0:
-            continue
-        await accrue_loan_interest(loan, cfg, now)
-        fresh = await repo.get_loan(loan.chat_id, loan.user_id)
-        if fresh is None:
-            continue
-        if not fresh.defaulted and now >= fresh.due_at:
-            await mark_default(fresh)
+        fresh = None
+        async with players_repo.get_chat_lock(loan.chat_id):
+            if loan.principal <= 0 and loan.accrued_interest <= 0:
+                continue
+            await accrue_loan_interest(loan, cfg, now)
             fresh = await repo.get_loan(loan.chat_id, loan.user_id)
+            if fresh is None:
+                continue
+            if not fresh.defaulted and now >= fresh.due_at:
+                await mark_default(fresh)
+                fresh = await repo.get_loan(loan.chat_id, loan.user_id)
+            if fresh is not None and fresh.defaulted:
+                # A deposit is no shelter from a defaulted debt.
+                await recover_from_deposit(fresh)
+                fresh = await repo.get_loan(loan.chat_id, loan.user_id)
         if fresh is not None and fresh.defaulted:
-            # Pull from the debtor's deposit first, then nag about whatever remains.
-            await recover_from_deposit(fresh)
-            fresh = await repo.get_loan(loan.chat_id, loan.user_id)
-            if fresh is not None:
-                await _maybe_remind(bot, fresh, cfg, now)
+            await _maybe_remind(bot, fresh, cfg, now)
 
     for dep in await repo.all_deposits():
-        if dep.principal > 0:
-            await roll_confiscation(dep, cfg, today)
+        async with players_repo.get_chat_lock(dep.chat_id):
+            fresh = await repo.get_deposit(dep.chat_id, dep.user_id)
+            if fresh is not None and fresh.principal > 0:
+                await roll_confiscation(fresh, cfg, today)

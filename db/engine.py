@@ -31,23 +31,25 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     },
     "corporation": {
         "deposits_reconciled": "INTEGER DEFAULT 0",
+        "bank_rebalanced_v2": "INTEGER DEFAULT 0",
     },
     "deposits": {
         "last_confisc_day": "TEXT DEFAULT ''",
+        "interest_remainder_ppm": "INTEGER DEFAULT 0",
     },
     "global_settings": {
-        "dep_rate_pct": "INTEGER DEFAULT 3",
-        "dep_rate_decay_pct": "INTEGER DEFAULT 15",
-        "dep_rate_floor_pct": "INTEGER DEFAULT 1",
-        "dep_yield_cap_pct": "INTEGER DEFAULT 20",
+        "dep_rate_pct": "INTEGER DEFAULT 2",
+        "dep_rate_decay_pct": "INTEGER DEFAULT 25",
+        "dep_rate_floor_pct": "INTEGER DEFAULT 0",
+        "dep_yield_cap_pct": "INTEGER DEFAULT 8",
         "dep_term_days": "INTEGER DEFAULT 7",
         "dep_early_penalty_pct": "INTEGER DEFAULT 30",
         "dep_confisc_chance_pct": "INTEGER DEFAULT 2",
         "dep_confisc_max_pct": "INTEGER DEFAULT 10",
-        "loan_rate_pct": "INTEGER DEFAULT 5",
+        "loan_rate_pct": "INTEGER DEFAULT 2",
         "loan_max_base_pct": "INTEGER DEFAULT 50",
-        "loan_min": "INTEGER DEFAULT 5",
-        "loan_term_days": "INTEGER DEFAULT 5",
+        "loan_min": "INTEGER DEFAULT 15",
+        "loan_term_days": "INTEGER DEFAULT 7",
         "loan_garnish_pct": "INTEGER DEFAULT 50",
         "loan_deny_cooldown_sec": "INTEGER DEFAULT 1800",
         "loan_duel_garnish_pct": "INTEGER DEFAULT 50",
@@ -110,6 +112,7 @@ async def init_db() -> None:
                 if col in existing:
                     await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {col}"))
         await _reconcile_deposits(conn)
+        await _rebalance_bank_defaults(conn)
 
 
 async def _reconcile_deposits(conn) -> None:
@@ -147,6 +150,40 @@ async def _reconcile_deposits(conn) -> None:
             ),
             {"b": total},
         )
+
+
+async def _rebalance_bank_defaults(conn) -> None:
+    """Apply the v2 deposit defaults once without trampling admin tuning.
+
+    Existing installations get the new values only when all four relevant
+    settings still exactly match the shipped v1 defaults. Fresh databases
+    already use the v2 ORM defaults. The Corporation flag makes this decision
+    permanent, even if an admin later deliberately recreates the old tuple.
+    """
+    done = (
+        await conn.execute(text("SELECT bank_rebalanced_v2 FROM corporation WHERE id = 1"))
+    ).scalar()
+    if done:
+        return
+    await conn.execute(
+        text(
+            "UPDATE global_settings SET dep_rate_pct = 2, "
+            "dep_rate_decay_pct = 25, dep_rate_floor_pct = 0, "
+            "dep_yield_cap_pct = 8 WHERE id = 1 AND dep_rate_pct = 3 "
+            "AND dep_rate_decay_pct = 15 AND dep_rate_floor_pct = 1 "
+            "AND dep_yield_cap_pct = 20"
+        )
+    )
+    await conn.execute(
+        text(
+            "UPDATE global_settings SET loan_rate_pct = 2, loan_min = 15, "
+            "loan_term_days = 7 WHERE id = 1 AND loan_rate_pct = 5 "
+            "AND loan_min = 5 AND loan_term_days = 5"
+        )
+    )
+    await conn.execute(
+        text("UPDATE corporation SET bank_rebalanced_v2 = 1 WHERE id = 1")
+    )
 
 
 async def dispose_engine() -> None:

@@ -273,6 +273,14 @@ async def render_chat(
     rows.append(
         [
             InlineKeyboardButton(
+                text=texts.BTN_HEALTH_REFORM,
+                callback_data=f"adm:reform:{chat_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
                 text=texts.BTN_CHAT_SETTINGS, callback_data=f"adm:settings:{chat_id}"
             ),
             InlineKeyboardButton(
@@ -806,6 +814,48 @@ async def cb_reset_chat(callback: CallbackQuery) -> None:
         texts.admin_confirm_reset_chat(title),
         _confirm_kb(f"adm:yes:rchat:{chat_id}", f"adm:chat:{chat_id}"),
     )
+
+
+@router.callback_query(F.data.startswith("adm:reform:"))
+async def cb_health_reform(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":")[2])
+    chat = await chats_repo.get_chat(chat_id)
+    title = chat.title if chat and chat.title else str(chat_id)
+    result = await admin_actions.preview_health_reform(chat_id)
+    if result.already_applied:
+        kb = InlineKeyboardMarkup(inline_keyboard=[_back_row(f"adm:chat:{chat_id}")])
+    else:
+        kb = _confirm_kb(
+            f"adm:yes:reform:{chat_id}",
+            f"adm:chat:{chat_id}",
+        )
+    await _edit(callback, texts.admin_health_reform_preview(title, result), kb)
+
+
+@router.callback_query(F.data.startswith("adm:yes:reform:"))
+async def cb_do_health_reform(callback: CallbackQuery, bot: Bot) -> None:
+    chat_id = int(callback.data.split(":")[3])
+    result = await admin_actions.apply_health_reform(callback.from_user.id, chat_id)
+    announced = False
+    if not result.already_applied:
+        try:
+            await bot.send_message(
+                chat_id,
+                texts.health_reform_announcement(result),
+                parse_mode="HTML",
+            )
+            announced = True
+        except Exception:
+            announced = False
+    text, kb = await render_chat(chat_id)
+    await _edit(callback, text, kb)
+    if result.already_applied:
+        await callback.answer("Комиссия уже провела сушку в этом чате.", show_alert=True)
+    else:
+        await callback.answer(
+            texts.admin_health_reform_done(result, announced),
+            show_alert=True,
+        )
 
 
 @router.callback_query(F.data.startswith("adm:yes:rchat:"))

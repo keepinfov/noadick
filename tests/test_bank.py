@@ -52,17 +52,31 @@ def test_deposit_day_interest_respects_cap():
     assert bank.deposit_day_interest(0, 0, 0, c) == 0
 
 
-def test_deposit_day_interest_floor_for_small_principal():
+def test_small_deposit_carries_fraction_without_free_minimum():
     from services import bank
 
     c = cfg()
-    # A tiny deposit truncates raw interest to 0 (10 * 3% = 0.3 -> 0) but the floor
-    # pays 1 as long as the yield cap leaves headroom.
-    assert int(10 * c.dep_rate_pct / 100) == 0  # would truncate without the floor
-    assert bank.deposit_day_interest(10, 0, 0, c) == 1
-    # ...but the floor never breaches the cap: at the cap there is no headroom.
-    cap_total = 10 * c.dep_yield_cap_pct // 100
-    assert bank.deposit_day_interest(10, cap_total, 0, c) == 0
+    principal = 20
+    accrued = 0
+    remainder = 0
+    paid = []
+    for day in range(4):
+        interest, remainder = bank.deposit_day_credit(
+            principal, accrued, day, remainder, c
+        )
+        paid.append(interest)
+        accrued += interest
+    assert paid[:3] == [0, 0, 0]
+    assert paid[3] == 1
+    assert accrued == principal * c.dep_yield_cap_pct // 100
+    assert remainder == 0
+
+
+def test_rebalanced_bank_defaults_help_newcomers():
+    c = cfg()
+    assert (c.dep_rate_pct, c.dep_rate_decay_pct, c.dep_rate_floor_pct) == (2, 25, 0)
+    assert c.dep_yield_cap_pct == 8
+    assert (c.loan_rate_pct, c.loan_min, c.loan_term_days) == (2, 15, 7)
 
 
 def test_credit_multiplier_clamped():
@@ -184,6 +198,51 @@ async def test_accrue_deposit_idempotent_per_day(db):
     assert again == 0  # already earned today
     next_day = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-04")
     assert next_day > 0
+
+
+async def test_fractional_deposit_day_is_consumed_without_payout(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(20)
+    await bank.open_deposit(CHAT, USER, 20)
+    assert await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03") == 0
+    dep = await repo.get_deposit(CHAT, USER)
+    assert dep.active_days_count == 1
+    assert dep.last_accrual_day == "2026-06-03"
+    assert dep.interest_remainder_ppm > 0
+
+
+async def test_legacy_default_settings_are_rebalanced_once(db):
+    from sqlalchemy import text
+
+    from db import engine as engine_mod
+    from repositories import global_settings as settings_repo
+
+    await settings_repo.upsert(
+        dep_rate_pct=3,
+        dep_rate_decay_pct=15,
+        dep_rate_floor_pct=1,
+        dep_yield_cap_pct=20,
+        loan_rate_pct=5,
+        loan_min=5,
+        loan_term_days=5,
+    )
+    async with engine_mod.get_engine().begin() as conn:
+        await conn.execute(
+            text("UPDATE corporation SET bank_rebalanced_v2 = 0 WHERE id = 1")
+        )
+    await engine_mod.dispose_engine()
+    await engine_mod.init_db()
+
+    row = await settings_repo.get_row()
+    assert (
+        row.dep_rate_pct,
+        row.dep_rate_decay_pct,
+        row.dep_rate_floor_pct,
+        row.dep_yield_cap_pct,
+    ) == (2, 25, 0, 8)
+    assert (row.loan_rate_pct, row.loan_min, row.loan_term_days) == (2, 15, 7)
 
 
 async def test_deposit_interest_capped_by_empty_corp(db):

@@ -17,6 +17,7 @@ from repositories import chats as chats_repo
 from repositories import events as E
 from repositories import players as players_repo
 from repositories.players import get_chat_lock, now_ts
+from services import economy_reform
 from services.admins import is_global_admin
 
 
@@ -160,6 +161,16 @@ async def reset_chat(actor_id: int, chat_id: int) -> ActionResult:
         n = await players_repo.reset_chat_players(chat_id)
     await _audit(actor_id, "reset_chat", target_chat=chat_id, payload={"removed": n})
     return ActionResult(True, texts.res_chat_reset(n))
+
+
+async def preview_health_reform(chat_id: int) -> economy_reform.ReformResult:
+    return await economy_reform.preview(chat_id)
+
+
+async def apply_health_reform(
+    actor_id: int, chat_id: int
+) -> economy_reform.ReformResult:
+    return await economy_reform.apply(chat_id, actor_id)
 
 
 async def local_unban(
