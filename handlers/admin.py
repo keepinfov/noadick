@@ -838,15 +838,11 @@ async def cb_do_health_reform(callback: CallbackQuery, bot: Bot) -> None:
     result = await admin_actions.apply_health_reform(callback.from_user.id, chat_id)
     announced = False
     if not result.already_applied:
-        try:
-            await bot.send_message(
-                chat_id,
-                texts.health_reform_announcement(result),
-                parse_mode="HTML",
-            )
-            announced = True
-        except Exception:
-            announced = False
+        announced, _, _ = await _send_to_resolved_thread(
+            bot,
+            chat_id,
+            texts.health_reform_announcement(result),
+        )
     text, kb = await render_chat(chat_id)
     await _edit(callback, text, kb)
     if result.already_applied:
@@ -1254,6 +1250,17 @@ async def _bcast_send(bot: Bot, chat_id: int, text: str, thread_id: int | None) 
     return False
 
 
+async def _send_to_resolved_thread(
+    bot: Bot, chat_id: int, text: str
+) -> tuple[bool, str, int | None]:
+    """Send to the configured/active topic, retrying deleted topics in General."""
+    thread_id, reason = await threads_repo.resolve_thread(chat_id)
+    ok = await _bcast_send(bot, chat_id, text, thread_id)
+    if not ok and thread_id is not None:
+        ok = await _bcast_send(bot, chat_id, text, None)
+    return ok, reason, thread_id
+
+
 @router.callback_query(F.data == "adm:yes:bcast")
 async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
@@ -1273,10 +1280,9 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
     sent = 0
     failed = 0
     for chat_id in targets:
-        thread_id, reason = await threads_repo.resolve_thread(chat_id)
-        ok = await _bcast_send(bot, chat_id, text, thread_id)
-        if not ok and thread_id is not None:  # тема могла быть удалена — ретрай в General
-            ok = await _bcast_send(bot, chat_id, text, None)
+        ok, reason, thread_id = await _send_to_resolved_thread(
+            bot, chat_id, text
+        )
         sent += int(ok)
         failed += int(not ok)
         if ok and reason == "auto":
