@@ -4,6 +4,7 @@ Used to throttle command replies so a user cannot make the bot flood a group by
 repeating a command. Memory-only (``time.monotonic``); cleared on restart, which
 is fine — cooldowns are short-lived anti-spam, not durable state.
 """
+
 from __future__ import annotations
 
 import time

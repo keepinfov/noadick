@@ -46,7 +46,7 @@ def _time_until_midnight(now: datetime) -> str:
 
 
 def _mention(user_id: int, name: str) -> str:
-    return f"<a href=\"tg://user?id={user_id}\">{html.escape(name)}</a>"
+    return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
 
 @router.message(Command("dick"))
@@ -120,9 +120,7 @@ async def cmd_dick(message: Message) -> None:
         gain = player["size"] - before
         garnished = await bank.garnish_on_dict(chat_id, user_id, player, gain)
         storage[uid_str] = player
-        dep_interest = await bank.accrue_deposit_on_play(
-            chat_id, user_id, now.date().isoformat()
-        )
+        dep_interest = await bank.accrue_deposit_on_play(chat_id, user_id, now.date().isoformat())
 
         mention = _mention(user_id, user.first_name)
         rank = _rank(storage, user_id)
@@ -148,7 +146,9 @@ async def cmd_dick(message: Message) -> None:
         ts = int(now.timestamp())
         await E.ensure_baseline(chat_id, user_id, before, created_at=ts)
         await E.log_event(
-            chat_id, user_id, E.DICK,
+            chat_id,
+            user_id,
+            E.DICK,
             delta=player["size"] - before,
             size_after=player["size"],
             meta={"rolled": rolled},
@@ -156,7 +156,9 @@ async def cmd_dick(message: Message) -> None:
         )
         if infection:
             await E.log_event(
-                chat_id, user_id, E.INFECTION,
+                chat_id,
+                user_id,
+                E.INFECTION,
                 size_after=player["size"],
                 meta={"disease_id": infection.id},
                 created_at=ts,

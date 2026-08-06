@@ -24,9 +24,7 @@ async def upsert_chat(chat_id: int, title: str, ctype: str, chat_hash: str) -> C
         return chat
 
 
-async def upsert_user(
-    user_id: int, first_name: str, username: str | None
-) -> User:
+async def upsert_user(user_id: int, first_name: str, username: str | None) -> User:
     factory = get_session_factory()
     async with factory() as session:
         user = await session.get(User, user_id)
@@ -51,10 +49,10 @@ async def list_chats(offset: int = 0, limit: int = 10) -> list[Chat]:
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(
-                select(Chat).order_by(Chat.title).offset(offset).limit(limit)
-            )
-        ).scalars().all()
+            (await session.execute(select(Chat).order_by(Chat.title).offset(offset).limit(limit)))
+            .scalars()
+            .all()
+        )
         return list(rows)
 
 
@@ -83,9 +81,7 @@ def _active_cutoff(active_days: int) -> int:
     return int(time.time()) - active_days * 86400
 
 
-async def chat_ids_by_mode(
-    mode: str, active_days: int = ACTIVE_DAYS_DEFAULT
-) -> list[int]:
+async def chat_ids_by_mode(mode: str, active_days: int = ACTIVE_DAYS_DEFAULT) -> list[int]:
     """Chat ids for a broadcast, filtered by target mode (excludes banned chats):
     - "groups": group/supergroup chats;
     - "dm": private chats;
@@ -147,9 +143,7 @@ async def list_chats_with_owner(
             stmt = stmt.order_by(func.coalesce(pc.c.pc, 0).desc())
         else:
             stmt = stmt.order_by(Chat.title)
-        rows = (
-            await session.execute(stmt.offset(offset).limit(limit))
-        ).all()
+        rows = (await session.execute(stmt.offset(offset).limit(limit))).all()
         return [(chat, user) for chat, user in rows]
 
 

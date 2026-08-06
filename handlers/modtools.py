@@ -3,6 +3,7 @@
 Plain slash commands gated by IsChatAdmin (chat owner/administrator), distinct
 from the global /admin panel. Available only in groups/supergroups.
 """
+
 from __future__ import annotations
 
 from aiogram import Router
@@ -19,9 +20,7 @@ from services.settings import SettingError, get_effective, set_setting
 router = Router()
 
 
-async def _resolve_target(
-    message: Message, command: CommandObject
-) -> tuple[int, str] | None:
+async def _resolve_target(message: Message, command: CommandObject) -> tuple[int, str] | None:
     """Target player from a reply or a numeric user id argument."""
     target = reply_target(message)
     if target is not None:

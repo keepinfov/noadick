@@ -7,11 +7,13 @@ rejection in a cooldown window, replies with a short notice that deletes itself
 after a few seconds. Further spam within the same window stays silent, so the
 notice itself cannot become a flood.
 """
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
 
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message
 
 import texts
@@ -23,7 +25,7 @@ NOTICE_TTL = 15
 
 async def _autodelete(message: Message, delay: int) -> None:
     await asyncio.sleep(delay)
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(TelegramAPIError):
         await message.delete()
 
 
@@ -39,9 +41,9 @@ async def _send_notice(message: Message) -> Message | None:
     forum-topic edge case), so the notice still appears."""
     try:
         return await message.reply(texts.COOLDOWN_NOTICE)
-    except Exception:
-        pass
-    with contextlib.suppress(Exception):
+    except TelegramAPIError:
+        return None
+    with contextlib.suppress(TelegramAPIError):
         return await message.answer(texts.COOLDOWN_NOTICE)
     return None
 

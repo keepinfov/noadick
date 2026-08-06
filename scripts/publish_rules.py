@@ -2,6 +2,7 @@
 
 Usage (from repo root):  python -m scripts.publish_rules
 """
+
 from __future__ import annotations
 
 import asyncio

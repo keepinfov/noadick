@@ -7,6 +7,7 @@ the first message from that chat (see services/registry.relink_legacy).
 Usage:
     python -m scripts.migrate_json [STORAGE_DIR]
 """
+
 from __future__ import annotations
 
 import asyncio

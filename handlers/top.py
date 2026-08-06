@@ -3,9 +3,9 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 import texts
+from handlers import cooldowns
 from models.disease import check_expire, disease_tag
 from repositories.players import get_chat_lock, get_storage, save_storage
-from handlers import cooldowns
 from services.global_settings import get_config_sync
 
 router = Router()

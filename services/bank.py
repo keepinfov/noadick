@@ -22,12 +22,15 @@ tested; the async ops below wrap them with repository IO. Callers that already h
 the per-chat lock (the /dick and /duel handlers) use the ``*_on_dict`` helpers so we
 never fight their in-memory player dict.
 """
+
 from __future__ import annotations
 
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from aiogram.exceptions import TelegramAPIError
 
 from repositories import bank as repo
 from repositories import events as E
@@ -296,15 +299,16 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
                 )
             if penalty or accrued_share:
                 await E.log_event(
-                    chat_id, user_id, E.DEPOSIT_PENALTY,
+                    chat_id,
+                    user_id,
+                    E.DEPOSIT_PENALTY,
                     meta={"penalty": penalty, "forfeit_interest": accrued_share},
                 )
 
         rem_principal = dep.principal - w
         rem_accrued = dep.accrued - accrued_share
         rem_remainder = (
-            dep.interest_remainder_ppm * rem_principal // dep.principal
-            if dep.principal else 0
+            dep.interest_remainder_ppm * rem_principal // dep.principal if dep.principal else 0
         )
         player = await players_repo.get_player(chat_id, user_id)
         new_size = (player.size if player else 0) + credited
@@ -314,15 +318,14 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
             await repo.delete_deposit(chat_id, user_id)
         else:
             await repo.upsert_deposit(
-                chat_id, user_id,
+                chat_id,
+                user_id,
                 principal=rem_principal,
                 accrued=max(0, rem_accrued),
                 interest_remainder_ppm=max(0, rem_remainder),
             )
 
-        await E.log_event(
-            chat_id, user_id, E.DEPOSIT_WITHDRAW, delta=credited, size_after=new_size
-        )
+        await E.log_event(chat_id, user_id, E.DEPOSIT_WITHDRAW, delta=credited, size_after=new_size)
     return OpResult(amount=credited, extra=penalty + (0 if matured else accrued_share))
 
 
@@ -406,16 +409,25 @@ async def take_loan(chat_id: int, user_id: int, amount: int) -> OpResult:
 
             now = _now()
             await repo.upsert_loan(
-                chat_id, user_id,
-                principal=amount, accrued_interest=0, opened_at=now,
-                due_at=now + cfg.loan_term_days * DAY, last_accrual_at=now,
-                last_reminded_at=0, defaulted=False,
+                chat_id,
+                user_id,
+                principal=amount,
+                accrued_interest=0,
+                opened_at=now,
+                due_at=now + cfg.loan_term_days * DAY,
+                last_accrual_at=now,
+                last_reminded_at=0,
+                defaulted=False,
             )
             new_size = size + amount
             await players_repo.set_player_fields(chat_id, user_id, size=new_size)
             await repo.corp_apply(delta=-amount)  # cash leaves the vault into the borrower
         await E.log_event(
-            chat_id, user_id, E.LOAN_OPEN, delta=amount, size_after=new_size,
+            chat_id,
+            user_id,
+            E.LOAN_OPEN,
+            delta=amount,
+            size_after=new_size,
             meta={"due_at": now + cfg.loan_term_days * DAY},
         )
     return OpResult(amount=amount)
@@ -451,12 +463,17 @@ async def repay_loan(chat_id: int, user_id: int, amount: int | None) -> OpResult
             await players_repo.set_player_fields(chat_id, user_id, loans_repaid=repaid)
         else:
             await repo.upsert_loan(
-                chat_id, user_id,
+                chat_id,
+                user_id,
                 accrued_interest=loan.accrued_interest - interest_part,
                 principal=loan.principal - principal_part,
             )
         await E.log_event(
-            chat_id, user_id, E.LOAN_REPAY, delta=-pay, size_after=new_size,
+            chat_id,
+            user_id,
+            E.LOAN_REPAY,
+            delta=-pay,
+            size_after=new_size,
             meta={"interest": interest_part, "cleared": remaining <= 0},
         )
     return OpResult(amount=pay, extra=interest_part)
@@ -508,13 +525,18 @@ async def _garnish(chat_id: int, user_id: int, player_dict: dict, base: int, pct
         await repo.delete_loan(chat_id, user_id)
     else:
         await repo.upsert_loan(
-            chat_id, user_id,
+            chat_id,
+            user_id,
             accrued_interest=loan.accrued_interest - interest_part,
             principal=loan.principal - principal_part,
         )
     await E.log_event(
-        chat_id, user_id, E.LOAN_GARNISH, delta=-take,
-        size_after=player_dict["size"], meta={"cleared": remaining <= 0},
+        chat_id,
+        user_id,
+        E.LOAN_GARNISH,
+        delta=-take,
+        size_after=player_dict["size"],
+        meta={"cleared": remaining <= 0},
     )
     return take
 
@@ -537,14 +559,13 @@ async def accrue_loan_interest(loan, cfg: GlobalConfig, now: int) -> int:
         return 0
     interest = loan_interest_accrued(loan.principal, full_days, cfg)
     await repo.upsert_loan(
-        loan.chat_id, loan.user_id,
+        loan.chat_id,
+        loan.user_id,
         accrued_interest=loan.accrued_interest + interest,
         last_accrual_at=loan.last_accrual_at + full_days * DAY,
     )
     if interest:
-        await E.log_event(
-            loan.chat_id, loan.user_id, E.LOAN_INTEREST, meta={"interest": interest}
-        )
+        await E.log_event(loan.chat_id, loan.user_id, E.LOAN_INTEREST, meta={"interest": interest})
     return interest
 
 
@@ -586,9 +607,7 @@ async def recover_from_deposit(loan) -> int:
             loan.chat_id,
             loan.user_id,
             principal=rem_dep,
-            interest_remainder_ppm=(
-                dep.interest_remainder_ppm * rem_dep // dep.principal
-            ),
+            interest_remainder_ppm=(dep.interest_remainder_ppm * rem_dep // dep.principal),
         )
     # Cash already in the till; only book the interest slice as earnings.
     async with repo.corp_lock():
@@ -599,12 +618,16 @@ async def recover_from_deposit(loan) -> int:
         await repo.delete_loan(loan.chat_id, loan.user_id)
     else:
         await repo.upsert_loan(
-            loan.chat_id, loan.user_id,
+            loan.chat_id,
+            loan.user_id,
             accrued_interest=loan.accrued_interest - interest_part,
             principal=loan.principal - principal_part,
         )
     await E.log_event(
-        loan.chat_id, loan.user_id, E.LOAN_GARNISH, delta=-take,
+        loan.chat_id,
+        loan.user_id,
+        E.LOAN_GARNISH,
+        delta=-take,
         meta={"cleared": remaining <= 0, "from_deposit": True},
     )
     return take
@@ -642,9 +665,7 @@ async def roll_confiscation(
         dep.chat_id,
         dep.user_id,
         principal=rem_principal,
-        interest_remainder_ppm=(
-            dep.interest_remainder_ppm * rem_principal // dep.principal
-        ),
+        interest_remainder_ppm=(dep.interest_remainder_ppm * rem_principal // dep.principal),
         last_confisc_day=today,
     )
     # The seized cash is already sitting in the till (deposits fund it). We only
@@ -689,7 +710,7 @@ async def _maybe_remind(bot, loan, cfg: GlobalConfig, now: int) -> None:
     overdue_for = max(0, now - loan.due_at)
     try:
         await bot.send_message(loan.user_id, texts.collector_reminder(debt, overdue_for))
-    except Exception:
+    except TelegramAPIError:
         # The debtor may never have opened a DM with the bot; skip silently and
         # try again next cycle (the cooldown flag is only armed on a real send).
         return
@@ -701,7 +722,7 @@ async def run_collector_pass(bot) -> None:
     roll deposit confiscations. Each step is best-effort and independent."""
     cfg = get_config_sync()
     now = _now()
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
 
     for loan in await repo.all_loans():
         fresh = None

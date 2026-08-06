@@ -1,4 +1,5 @@
 """Chat/user registration helpers and one-time legacy data relink."""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +17,7 @@ _checked: set[int] = set()
 
 
 def chat_hash(chat_id: int) -> str:
-    return hashlib.md5(str(chat_id).encode()).hexdigest()
+    return hashlib.md5(str(chat_id).encode(), usedforsecurity=False).hexdigest()
 
 
 async def relink_legacy(chat_id: int) -> int:
@@ -41,11 +42,9 @@ async def relink_legacy(chat_id: int) -> int:
             return 0
 
         existing_ids = set(
-            (
-                await session.execute(
-                    select(Player.user_id).where(Player.chat_id == chat_id)
-                )
-            ).scalars().all()
+            (await session.execute(select(Player.user_id).where(Player.chat_id == chat_id)))
+            .scalars()
+            .all()
         )
 
         imported = 0
@@ -68,7 +67,9 @@ async def relink_legacy(chat_id: int) -> int:
     # starting size right away. Written outside the import session.
     for uid, size, last_play in baselines:
         await E.log_event(
-            chat_id, uid, E.BASELINE,
+            chat_id,
+            uid,
+            E.BASELINE,
             size_after=size,
             created_at=last_play or None,
         )

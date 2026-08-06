@@ -21,10 +21,10 @@ async def set_default_thread(chat_id: int, thread_id: int) -> None:
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(
-                select(ChatThreadStat).where(ChatThreadStat.chat_id == chat_id)
-            )
-        ).scalars().all()
+            (await session.execute(select(ChatThreadStat).where(ChatThreadStat.chat_id == chat_id)))
+            .scalars()
+            .all()
+        )
         target = None
         for r in rows:
             if r.thread_id == thread_id:
@@ -34,9 +34,7 @@ async def set_default_thread(chat_id: int, thread_id: int) -> None:
                 r.is_default = False
         if target is None:
             session.add(
-                ChatThreadStat(
-                    chat_id=chat_id, thread_id=thread_id, count=0, is_default=True
-                )
+                ChatThreadStat(chat_id=chat_id, thread_id=thread_id, count=0, is_default=True)
             )
         await session.commit()
 
@@ -45,13 +43,17 @@ async def clear_default_thread(chat_id: int) -> bool:
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(
-                select(ChatThreadStat).where(
-                    ChatThreadStat.chat_id == chat_id,
-                    ChatThreadStat.is_default.is_(True),
+            (
+                await session.execute(
+                    select(ChatThreadStat).where(
+                        ChatThreadStat.chat_id == chat_id,
+                        ChatThreadStat.is_default.is_(True),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for r in rows:
             r.is_default = False
         await session.commit()

@@ -27,19 +27,21 @@ async def list_broadcasts(offset: int = 0, limit: int = 10) -> list[BroadcastLog
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(
-                select(BroadcastLog)
-                .order_by(BroadcastLog.created_at.desc(), BroadcastLog.id.desc())
-                .offset(offset)
-                .limit(limit)
+            (
+                await session.execute(
+                    select(BroadcastLog)
+                    .order_by(BroadcastLog.created_at.desc(), BroadcastLog.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows)
 
 
 async def count_broadcasts() -> int:
     factory = get_session_factory()
     async with factory() as session:
-        return (
-            await session.execute(select(func.count(BroadcastLog.id)))
-        ).scalar_one()
+        return (await session.execute(select(func.count(BroadcastLog.id)))).scalar_one()

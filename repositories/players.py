@@ -69,8 +69,8 @@ async def get_storage(chat_id: int) -> Storage:
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(select(Player).where(Player.chat_id == chat_id))
-        ).scalars().all()
+            (await session.execute(select(Player).where(Player.chat_id == chat_id))).scalars().all()
+        )
         return {str(p.user_id): player_to_dict(p) for p in rows}
 
 
@@ -80,9 +80,9 @@ async def save_storage(chat_id: int, storage: Storage) -> None:
         await ensure_chat(session, chat_id)
         existing = {
             p.user_id: p
-            for p in (
-                await session.execute(select(Player).where(Player.chat_id == chat_id))
-            ).scalars().all()
+            for p in (await session.execute(select(Player).where(Player.chat_id == chat_id)))
+            .scalars()
+            .all()
         }
         for uid_str, data in storage.items():
             uid = int(uid_str)
@@ -107,12 +107,14 @@ async def list_players(chat_id: int) -> list[Player]:
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(
-                select(Player)
-                .where(Player.chat_id == chat_id)
-                .order_by(Player.size.desc())
+            (
+                await session.execute(
+                    select(Player).where(Player.chat_id == chat_id).order_by(Player.size.desc())
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows)
 
 
@@ -141,9 +143,7 @@ async def list_players_page(
             stmt = stmt.order_by(Player.last_play.desc())
         else:
             stmt = stmt.order_by(Player.size.desc())
-        rows = (
-            await session.execute(stmt.offset(offset).limit(limit))
-        ).scalars().all()
+        rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
         return list(rows)
 
 
@@ -156,21 +156,23 @@ async def count_players(chat_id: int, name_filter: str | None = None) -> int:
         return (await session.execute(stmt)).scalar_one()
 
 
-async def list_chat_banned(
-    chat_id: int, offset: int, limit: int
-) -> list[Player]:
+async def list_chat_banned(chat_id: int, offset: int, limit: int) -> list[Player]:
     """Players locally banned in a chat (is_chat_banned), name-ordered, paged."""
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            await session.execute(
-                select(Player)
-                .where(Player.chat_id == chat_id, Player.is_chat_banned.is_(True))
-                .order_by(Player.name)
-                .offset(offset)
-                .limit(limit)
+            (
+                await session.execute(
+                    select(Player)
+                    .where(Player.chat_id == chat_id, Player.is_chat_banned.is_(True))
+                    .order_by(Player.name)
+                    .offset(offset)
+                    .limit(limit)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows)
 
 
@@ -223,9 +225,7 @@ async def delete_player(chat_id: int, user_id: int) -> bool:
 async def reset_chat_players(chat_id: int) -> int:
     factory = get_session_factory()
     async with factory() as session:
-        result = await session.execute(
-            delete(Player).where(Player.chat_id == chat_id)
-        )
+        result = await session.execute(delete(Player).where(Player.chat_id == chat_id))
         await session.commit()
         return result.rowcount or 0
 
@@ -252,8 +252,8 @@ async def find_players(query: str, limit: int = 25) -> list[Player]:
         else:
             stmt = stmt.where(Player.name.ilike(f"%{query}%"))
         rows = (
-            await session.execute(stmt.order_by(Player.size.desc()).limit(limit))
-        ).scalars().all()
+            (await session.execute(stmt.order_by(Player.size.desc()).limit(limit))).scalars().all()
+        )
         return list(rows)
 
 
@@ -270,10 +270,10 @@ async def find_players_page(query: str, offset: int, limit: int) -> list[Player]
     async with factory() as session:
         stmt = _find_filter(select(Player), query)
         rows = (
-            await session.execute(
-                stmt.order_by(Player.size.desc()).offset(offset).limit(limit)
-            )
-        ).scalars().all()
+            (await session.execute(stmt.order_by(Player.size.desc()).offset(offset).limit(limit)))
+            .scalars()
+            .all()
+        )
         return list(rows)
 
 
@@ -322,8 +322,9 @@ async def global_rank_for(user_id: int, chat_id: int, size: int) -> int:
     async with factory() as session:
         bigger = (
             await session.execute(
-                select(func.count(Player.user_id))
-                .where(Player.chat_id == chat_id, Player.size > size)
+                select(func.count(Player.user_id)).where(
+                    Player.chat_id == chat_id, Player.size > size
+                )
             )
         ).scalar_one()
         return bigger + 1
@@ -331,9 +332,7 @@ async def global_rank_for(user_id: int, chat_id: int, size: int) -> int:
 
 async def cure_expired(chat_id: int, user_id: int) -> None:
     """Persist disease expiry computed elsewhere (clears disease columns)."""
-    await set_player_fields(
-        chat_id, user_id, disease_id=None, disease_caught_at=None
-    )
+    await set_player_fields(chat_id, user_id, disease_id=None, disease_caught_at=None)
 
 
 def now_ts() -> int:

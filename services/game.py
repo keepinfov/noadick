@@ -1,4 +1,5 @@
 """Pure game mechanics, independent of Telegram, reusable by handlers/tests."""
+
 from __future__ import annotations
 
 import random
@@ -14,6 +15,6 @@ WEIGHTED_RANGES = [
 
 
 def roll_delta() -> int:
-    ranges, weights = zip(*WEIGHTED_RANGES)
+    ranges, weights = zip(*WEIGHTED_RANGES, strict=True)
     (lo, hi) = random.choices(ranges, weights=weights, k=1)[0]
     return random.randint(lo, hi)

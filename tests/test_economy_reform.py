@@ -72,9 +72,7 @@ async def test_reform_cuts_all_assets_once_and_keeps_corp_unchanged(db):
     assert dep.interest_remainder_ppm == 410_000
     assert (await bank_repo.get_corp()).balance == 123
 
-    events = await events_repo.get_events(
-        chat_id, user_id, types=[events_repo.HEALTH_REFORM]
-    )
+    events = await events_repo.get_events(chat_id, user_id, types=[events_repo.HEALTH_REFORM])
     assert len(events) == 1
     assert events[0].delta == -18
     assert events[0].size_after == 82
@@ -87,13 +85,11 @@ async def test_reform_cuts_all_assets_once_and_keeps_corp_unchanged(db):
     await events_repo.log_event(
         chat_id, user_id, events_repo.DEPOSIT_INTEREST, meta={"interest": 1}
     )
-    assert await stats.size_timeline(chat_id, user_id) == [
-        (events[0].created_at, 82)
-    ]
+    assert await stats.size_timeline(chat_id, user_id) == [(events[0].created_at, 82)]
 
     again = await economy_reform.apply(chat_id, actor_id=888)
     assert again.already_applied is True
     assert (await players_repo.get_player(chat_id, user_id)).size == 82
-    assert len(
-        await events_repo.get_events(chat_id, user_id, types=[events_repo.HEALTH_REFORM])
-    ) == 1
+    assert (
+        len(await events_repo.get_events(chat_id, user_id, types=[events_repo.HEALTH_REFORM])) == 1
+    )

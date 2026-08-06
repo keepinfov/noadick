@@ -1,12 +1,15 @@
 """Outer middleware: keep a live registry of chats/users, relink legacy data,
 and enforce bans. Runs on every message and callback query."""
+
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (
     CallbackQuery,
     Chat,
@@ -23,6 +26,8 @@ from services import cooldown
 from services.admins import is_global_admin
 from services.global_settings import get_config_sync
 from services.registry import chat_hash, relink_legacy
+
+logger = logging.getLogger(__name__)
 
 
 def _extract(event: Any) -> tuple[Chat | None, User | None]:
@@ -57,8 +62,8 @@ class RegistryMiddleware(BaseMiddleware):
                 await event.answer(notice, show_alert=True)
             elif isinstance(event, Message) and event.text and event.text.startswith("/"):
                 await event.reply(notice)
-        except Exception:
-            pass
+        except TelegramAPIError:
+            logger.info("Could not deliver ban status notice")
 
     async def __call__(
         self,
@@ -69,9 +74,7 @@ class RegistryMiddleware(BaseMiddleware):
         chat, user = _extract(event)
 
         if user is not None:
-            db_user = await chats_repo.upsert_user(
-                user.id, user.first_name or "", user.username
-            )
+            db_user = await chats_repo.upsert_user(user.id, user.first_name or "", user.username)
             if db_user.is_banned and not is_global_admin(user.id):
                 # Lazily lift an expired timed ban on first action after expiry.
                 if db_user.ban_until is not None and db_user.ban_until < time.time():
@@ -127,8 +130,8 @@ class RegistryMiddleware(BaseMiddleware):
                     )
                     try:
                         await event.reply(texts.DM_GATE, reply_markup=kb)
-                    except Exception:
-                        pass
+                    except TelegramAPIError:
+                        logger.info("Could not deliver DM gate notice")
                 return None
 
         return await handler(event, data)

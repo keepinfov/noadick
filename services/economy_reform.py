@@ -1,4 +1,5 @@
 """Versioned, one-off economy reforms applied to a single chat."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -83,9 +84,7 @@ async def preview(chat_id: int) -> ReformResult:
                 applied.total_after,
             )
         players = list(
-            (await session.execute(select(Player).where(Player.chat_id == chat_id)))
-            .scalars()
-            .all()
+            (await session.execute(select(Player).where(Player.chat_id == chat_id))).scalars().all()
         )
         deposits = {
             d.user_id: d
@@ -134,7 +133,8 @@ async def apply(chat_id: int, actor_id: int) -> ReformResult:
                     dep.accrued -= entry.accrued_cut
                     if entry.principal_cut:
                         dep.interest_remainder_ppm = (
-                            dep.interest_remainder_ppm * dep.principal
+                            dep.interest_remainder_ppm
+                            * dep.principal
                             // (dep.principal + entry.principal_cut)
                         )
                 session.add(

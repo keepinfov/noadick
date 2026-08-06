@@ -8,7 +8,8 @@ import texts
 from handlers import cooldowns
 from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
-from services import bank, stats as S
+from services import bank
+from services import stats as S
 from services.global_settings import get_config_sync
 
 router = Router()
@@ -53,9 +54,7 @@ def format_global_profile(stats: S.GlobalProfileStats) -> str:
     lines.append(texts.global_plays(stats.plays, stats.total_grown, stats.total_lost))
     if stats.best_roll is not None and stats.worst_roll is not None:
         lines.append(texts.global_best_worst(stats.best_roll, stats.worst_roll))
-    lines.append(
-        texts.global_duels(stats.duels_total, stats.wins, stats.losses, stats.winrate)
-    )
+    lines.append(texts.global_duels(stats.duels_total, stats.wins, stats.losses, stats.winrate))
     lines.append(texts.global_infections(stats.infections))
     lines.append(texts.global_record(stats.best_size_ever))
     if stats.first_play_ts is not None:
@@ -154,9 +153,7 @@ async def cmd_me(message: Message, bot: Bot) -> None:
         link = await _global_link(bot)
         if link:
             reply_markup = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text=texts.GLOBAL_BUTTON, url=link)]
-                ]
+                inline_keyboard=[[InlineKeyboardButton(text=texts.GLOBAL_BUTTON, url=link)]]
             )
 
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=reply_markup)

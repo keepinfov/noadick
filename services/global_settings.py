@@ -10,6 +10,7 @@ process-global snapshot (or the hardcoded defaults before it is populated). The
 snapshot is refreshed at startup (``bot.py`` after ``init_db``) and eagerly after
 every write, so it is always current without polling.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields

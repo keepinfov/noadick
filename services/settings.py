@@ -5,6 +5,7 @@ stake/timeout). When unset, process-wide defaults apply (env ``TZ`` and the
 historical hardcoded values). Reads are cached for ``_TTL`` seconds to avoid a
 DB round-trip on every game command; writes invalidate the chat's entry.
 """
+
 from __future__ import annotations
 
 import os

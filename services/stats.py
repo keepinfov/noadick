@@ -3,6 +3,7 @@
 Telegram-agnostic so the same functions back /me today and chart rendering /
 a web panel later.
 """
+
 from __future__ import annotations
 
 import os
@@ -230,9 +231,7 @@ async def size_timeline(chat_id: int, user_id: int) -> list[tuple[int, int]]:
     return [(e.created_at, e.size_after) for e in evs]
 
 
-async def daily_deltas(
-    chat_id: int, user_id: int, days: int = 14
-) -> list[tuple[date, int]]:
+async def daily_deltas(chat_id: int, user_id: int, days: int = 14) -> list[tuple[date, int]]:
     evs = await E.get_events(chat_id, user_id, types=[E.DICK])
     tz = _tz()
     by_date: dict[date, int] = {}

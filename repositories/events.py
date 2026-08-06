@@ -59,9 +59,7 @@ async def has_events(chat_id: int, user_id: int) -> bool:
     async with factory() as session:
         found = (
             await session.execute(
-                select(Event.id)
-                .where(Event.chat_id == chat_id, Event.user_id == user_id)
-                .limit(1)
+                select(Event.id).where(Event.chat_id == chat_id, Event.user_id == user_id).limit(1)
             )
         ).first()
         return found is not None
@@ -78,9 +76,7 @@ async def ensure_baseline(
     if await has_events(chat_id, user_id):
         return
     ts = (created_at if created_at is not None else int(time.time())) - 1
-    await log_event(
-        chat_id, user_id, BASELINE, delta=0, size_after=size_before, created_at=ts
-    )
+    await log_event(chat_id, user_id, BASELINE, delta=0, size_after=size_before, created_at=ts)
 
 
 async def get_events(
@@ -92,9 +88,7 @@ async def get_events(
 ) -> list[Event]:
     factory = get_session_factory()
     async with factory() as session:
-        stmt = select(Event).where(
-            Event.chat_id == chat_id, Event.user_id == user_id
-        )
+        stmt = select(Event).where(Event.chat_id == chat_id, Event.user_id == user_id)
         if types:
             stmt = stmt.where(Event.type.in_(types))
         if since is not None:
@@ -132,12 +126,8 @@ async def global_dick_aggregate(
             await session.execute(
                 select(
                     func.count(Event.id),
-                    func.coalesce(
-                        func.sum(case((Event.delta > 0, Event.delta), else_=0)), 0
-                    ),
-                    func.coalesce(
-                        func.sum(case((Event.delta < 0, -Event.delta), else_=0)), 0
-                    ),
+                    func.coalesce(func.sum(case((Event.delta > 0, Event.delta), else_=0)), 0),
+                    func.coalesce(func.sum(case((Event.delta < 0, -Event.delta), else_=0)), 0),
                     func.max(Event.delta),
                     func.min(Event.delta),
                 ).where(Event.user_id == user_id, Event.type == DICK)
@@ -164,8 +154,7 @@ async def global_best_size(user_id: int) -> int:
     async with factory() as session:
         return (
             await session.execute(
-                select(func.coalesce(func.max(Event.size_after), 0))
-                .where(Event.user_id == user_id)
+                select(func.coalesce(func.max(Event.size_after), 0)).where(Event.user_id == user_id)
             )
         ).scalar_one()
 
@@ -175,8 +164,9 @@ async def global_first_play(user_id: int) -> int | None:
     async with factory() as session:
         return (
             await session.execute(
-                select(func.min(Event.created_at))
-                .where(Event.user_id == user_id, Event.type != BASELINE)
+                select(func.min(Event.created_at)).where(
+                    Event.user_id == user_id, Event.type != BASELINE
+                )
             )
         ).scalar_one()
 
@@ -187,9 +177,9 @@ async def global_duel_events(user_id: int) -> list[Event]:
         return list(
             (
                 await session.execute(
-                    select(Event).where(
-                        Event.user_id == user_id, Event.type == DUEL
-                    )
+                    select(Event).where(Event.user_id == user_id, Event.type == DUEL)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
