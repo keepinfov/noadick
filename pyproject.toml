@@ -1,0 +1,66 @@
+[project]
+name = "noadick"
+version = "0.1.0"
+description = "Group-chat game bot for Telegram"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "aiogram>=3.30,<3.31",
+    "aiohttp-socks>=0.11,<0.12",
+    "aiosqlite>=0.22,<0.23",
+    "alembic>=1.18,<1.19",
+    "pydantic-settings>=2.14,<2.15",
+    "sqlalchemy[asyncio]>=2.0.51,<2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pip-audit>=2.10,<3",
+    "pytest>=9.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "ruff>=0.16,<0.17",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["B", "BLE", "E", "F", "I", "LOG", "S", "SIM", "UP"]
+ignore = [
+    "E501", # long user-facing strings are clearer when kept intact
+    "S101", # pytest assertions
+    "S108", # heartbeat path is configurable and contains no sensitive data
+    "S311", # game randomness is deliberately non-cryptographic
+    "SIM102",
+    "SIM105",
+    "SIM108",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
+include = [
+    "bot.py",
+    "callbacks.py",
+    "config.py",
+    "db",
+    "migrations",
+    "observability.py",
+    "scripts",
+    "services/backups.py",
+    "services/economy_metrics.py",
+]
+exclude = ["data", "storage", ".venv"]
+
+[tool.uv]
+package = false
