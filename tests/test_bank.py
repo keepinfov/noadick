@@ -5,10 +5,10 @@ file (one per test) so money conservation and the Corporation balance can be
 asserted end-to-end. The global config is left at its defaults (the cache is
 empty, so ``get_config_sync`` returns ``_defaults()``).
 """
+
 from __future__ import annotations
 
 import os
-import random
 import tempfile
 
 import pytest
@@ -61,9 +61,7 @@ def test_small_deposit_carries_fraction_without_free_minimum():
     remainder = 0
     paid = []
     for day in range(4):
-        interest, remainder = bank.deposit_day_credit(
-            principal, accrued, day, remainder, c
-        )
+        interest, remainder = bank.deposit_day_credit(principal, accrued, day, remainder, c)
         paid.append(interest)
         accrued += interest
     assert paid[:3] == [0, 0, 0]
@@ -229,9 +227,8 @@ async def test_legacy_default_settings_are_rebalanced_once(db):
         loan_term_days=5,
     )
     async with engine_mod.get_engine().begin() as conn:
-        await conn.execute(
-            text("UPDATE corporation SET bank_rebalanced_v2 = 0 WHERE id = 1")
-        )
+        await conn.execute(text("UPDATE corporation SET bank_rebalanced_v2 = 0 WHERE id = 1"))
+        await conn.execute(text("DELETE FROM alembic_version"))
     await engine_mod.dispose_engine()
     await engine_mod.init_db()
 
@@ -243,6 +240,24 @@ async def test_legacy_default_settings_are_rebalanced_once(db):
         row.dep_yield_cap_pct,
     ) == (2, 25, 0, 8)
     assert (row.loan_rate_pct, row.loan_min, row.loan_term_days) == (2, 15, 7)
+
+    # Once versioned, startup no longer repeats a data migration or overrides
+    # deliberate admin tuning that happens to match historical defaults.
+    await settings_repo.upsert(
+        dep_rate_pct=3,
+        dep_rate_decay_pct=15,
+        dep_rate_floor_pct=1,
+        dep_yield_cap_pct=20,
+    )
+    await engine_mod.dispose_engine()
+    await engine_mod.init_db()
+    row = await settings_repo.get_row()
+    assert (
+        row.dep_rate_pct,
+        row.dep_rate_decay_pct,
+        row.dep_rate_floor_pct,
+        row.dep_yield_cap_pct,
+    ) == (3, 15, 1, 20)
 
 
 async def test_deposit_interest_capped_by_empty_corp(db):
@@ -383,8 +398,8 @@ async def test_garnish_only_when_defaulted(db):
 
 async def test_garnish_clearing_default_does_not_credit_history(db):
     from repositories import bank as repo
-    from services import bank
     from repositories import players as players_repo
+    from services import bank
 
     await _seed_player(1000)
     await repo.corp_apply(delta=100)
@@ -409,8 +424,12 @@ async def test_accrue_loan_interest_frozen_on_default(db):
     c = cfg()
     now = 1_000_000
     await repo.upsert_loan(
-        CHAT, USER, principal=100, accrued_interest=0,
-        last_accrual_at=now - 10 * bank.DAY, defaulted=True,
+        CHAT,
+        USER,
+        principal=100,
+        accrued_interest=0,
+        last_accrual_at=now - 10 * bank.DAY,
+        defaulted=True,
     )
     loan = await repo.get_loan(CHAT, USER)
     # A defaulted debt is frozen: no further interest accrues.
@@ -422,8 +441,8 @@ async def test_accrue_loan_interest_frozen_on_default(db):
 
 async def test_recover_from_deposit_pays_debt_from_principal(db):
     from repositories import bank as repo
-    from services import bank
     from repositories import players as players_repo
+    from services import bank
 
     await _seed_player(1000)
     await bank.open_deposit(CHAT, USER, 400)  # principal funds the till; size now 600

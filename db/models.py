@@ -92,6 +92,8 @@ class Corporation(Base):
     total_penalties: Mapped[int] = mapped_column(Integer, default=0)
     rules_url_rude: Mapped[str] = mapped_column(String, default="")
     rules_url_strict: Mapped[str] = mapped_column(String, default="")
+    deposits_reconciled: Mapped[bool] = mapped_column(Boolean, default=False)
+    bank_rebalanced_v2: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
