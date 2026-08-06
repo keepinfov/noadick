@@ -4,15 +4,17 @@ The UI is a thin layer over services.admin_actions (which are Telegram-agnostic
 and reusable by a future web panel). Access is restricted to user ids listed in
 the ADMIN_IDS environment variable (comma-separated).
 """
+
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from collections.abc import Callable
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -29,13 +31,12 @@ from repositories import broadcasts as broadcasts_repo
 from repositories import chats as chats_repo
 from repositories import players as players_repo
 from repositories import threads as threads_repo
-from services import admin_actions
-from services import global_settings
-from services import settings_view
+from services import admin_actions, economy_metrics, global_settings, settings_view
 from services.admins import admin_ids
 from services.global_settings import get_config
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 BCAST_MODES = ("all", "groups", "dm", "active")
 
@@ -97,19 +98,16 @@ def main_menu_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=texts.BTN_BCAST, callback_data="adm:bcast"),
             ],
             [
-                InlineKeyboardButton(
-                    text=texts.BTN_BCAST_HISTORY, callback_data="adm:bhist:0"
-                ),
+                InlineKeyboardButton(text=texts.BTN_BCAST_HISTORY, callback_data="adm:bhist:0"),
             ],
             [
-                InlineKeyboardButton(
-                    text=texts.BTN_GLOBAL_SETTINGS, callback_data="adm:gset"
-                ),
+                InlineKeyboardButton(text=texts.BTN_ECONOMY, callback_data="adm:economy"),
             ],
             [
-                InlineKeyboardButton(
-                    text=texts.BTN_GSET_BANK, callback_data="adm:gsetbank"
-                ),
+                InlineKeyboardButton(text=texts.BTN_GLOBAL_SETTINGS, callback_data="adm:gset"),
+            ],
+            [
+                InlineKeyboardButton(text=texts.BTN_GSET_BANK, callback_data="adm:gsetbank"),
             ],
         ]
     )
@@ -151,9 +149,7 @@ def _sort_row(
     """A row of sort-toggle buttons; the active one is marked. `cb` maps a sort
     code to its callback_data (which resets to page 0 with that sort)."""
     return [
-        InlineKeyboardButton(
-            text=texts.sort_btn(label, code == active), callback_data=cb(code)
-        )
+        InlineKeyboardButton(text=texts.sort_btn(label, code == active), callback_data=cb(code))
         for code, label in options
     ]
 
@@ -161,9 +157,7 @@ def _sort_row(
 def _filter_row(enter_data: str, clear_data: str | None) -> list[InlineKeyboardButton]:
     row = [InlineKeyboardButton(text=texts.BTN_FILTER, callback_data=enter_data)]
     if clear_data is not None:
-        row.append(
-            InlineKeyboardButton(text=texts.BTN_FILTER_CLEAR, callback_data=clear_data)
-        )
+        row.append(InlineKeyboardButton(text=texts.BTN_FILTER_CLEAR, callback_data=clear_data))
     return row
 
 
@@ -221,18 +215,19 @@ async def render_chat(
     if chat and chat.type == "private":
         owner = await chats_repo.get_user(chat_id)
         title = texts.admin_chat_label(
-            chat.type, chat.title,
+            chat.type,
+            chat.title,
             owner.first_name if owner else None,
             owner.username if owner else None,
             chat_id,
         )
     else:
-        title = (chat.title if chat and chat.title else str(chat_id))
+        title = chat.title if chat and chat.title else str(chat_id)
     banned = chat and chat.is_banned
     lines = [
         texts.crumb("Чаты", title),
         texts.admin_chat_header(title, chat_id),
-        texts.admin_chat_stats(stats['players'], stats['total_size'], stats['biggest']),
+        texts.admin_chat_stats(stats["players"], stats["total_size"], stats["biggest"]),
         texts.admin_chat_banned_count(banned_count),
     ]
     if name_filter:
@@ -251,9 +246,7 @@ async def render_chat(
     if not players:
         lines.append(texts.ADMIN_NO_PLAYERS)
 
-    rows.append(
-        _sort_row(texts.PLAYER_SORTS, sort, lambda s: f"adm:chat:{chat_id}:{s}:0")
-    )
+    rows.append(_sort_row(texts.PLAYER_SORTS, sort, lambda s: f"adm:chat:{chat_id}:{s}:0"))
     clear = f"adm:cfchat:{chat_id}:{sort}" if name_filter else None
     rows.append(_filter_row(f"adm:fchat:{chat_id}:{sort}", clear))
 
@@ -283,9 +276,7 @@ async def render_chat(
             InlineKeyboardButton(
                 text=texts.BTN_CHAT_SETTINGS, callback_data=f"adm:settings:{chat_id}"
             ),
-            InlineKeyboardButton(
-                text=texts.BTN_LOCAL_BANS, callback_data=f"adm:lban:{chat_id}:0"
-            ),
+            InlineKeyboardButton(text=texts.BTN_LOCAL_BANS, callback_data=f"adm:lban:{chat_id}:0"),
         ]
     )
     rows.append([InlineKeyboardButton(text=texts.BTN_BACK_LIST, callback_data="adm:chats:0")])
@@ -307,9 +298,7 @@ async def render_player(
         )
     p = await players_repo.get_player(chat_id, user_id)
     if p is None:
-        return texts.ADMIN_PLAYER_NOT_FOUND, InlineKeyboardMarkup(
-            inline_keyboard=[[back_btn]]
-        )
+        return texts.ADMIN_PLAYER_NOT_FOUND, InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
     user = await chats_repo.get_user(user_id)
     username = f"@{user.username}" if user and user.username else "—"
     tag = disease_tag(_player_dict(p))
@@ -393,11 +382,7 @@ def _confirm_kb(yes_data: str, back_data: str) -> InlineKeyboardMarkup:
 
 def _ban_user_reason_kb(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [
-            InlineKeyboardButton(
-                text=txt, callback_data=f"adm:bur:{chat_id}:{user_id}:{rid}"
-            )
-        ]
+        [InlineKeyboardButton(text=txt, callback_data=f"adm:bur:{chat_id}:{user_id}:{rid}")]
         for rid, txt in BAN_REASONS
     ]
     rows.append(
@@ -435,15 +420,9 @@ def _ban_chat_reason_kb(chat_id: int) -> InlineKeyboardMarkup:
         for rid, txt in BAN_REASONS
     ]
     rows.append(
-        [
-            InlineKeyboardButton(
-                text=texts.BTN_OWN_REASON, callback_data=f"adm:bcrc:{chat_id}"
-            )
-        ]
+        [InlineKeyboardButton(text=texts.BTN_OWN_REASON, callback_data=f"adm:bcrc:{chat_id}")]
     )
-    rows.append(
-        [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data=f"adm:chat:{chat_id}")]
-    )
+    rows.append([InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data=f"adm:chat:{chat_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -456,8 +435,8 @@ async def _notify_user_banned(
         suffix += texts.ban_until_suffix(texts.fmt_datetime(ban_until))
     try:
         await bot.send_message(user_id, texts.notify_user_banned(suffix))
-    except Exception:
-        pass
+    except TelegramAPIError:
+        logger.info("Could not deliver ban notice to user")
 
 
 async def _notify_chat_banned(bot: Bot, chat_id: int, reason: str | None) -> None:
@@ -465,8 +444,8 @@ async def _notify_chat_banned(bot: Bot, chat_id: int, reason: str | None) -> Non
     suffix = texts.ban_reason_suffix(reason)
     try:
         await bot.send_message(chat_id, texts.notify_chat_banned(suffix))
-    except Exception:
-        pass
+    except TelegramAPIError:
+        logger.info("Could not deliver chat ban notice")
 
 
 # ----------------------------------------------------------------- handlers ---
@@ -760,9 +739,7 @@ async def cb_ban_user_reason(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("adm:burx:"))
 async def cb_ban_user_apply(callback: CallbackQuery, bot: Bot) -> None:
     parts = callback.data.split(":")
-    chat_id, user_id, reason_id, dur_id = (
-        int(parts[2]), int(parts[3]), parts[4], parts[5]
-    )
+    chat_id, user_id, reason_id, dur_id = (int(parts[2]), int(parts[3]), parts[4], parts[5])
     reason = BAN_REASON_TEXT.get(reason_id)
     ban_until = _ban_until_from(dur_id)
     res = await admin_actions.ban_user(
@@ -785,9 +762,7 @@ async def cb_ban_user_custom(callback: CallbackQuery, state: FSMContext) -> None
 
 
 @router.callback_query(F.data.startswith("adm:burxc:"))
-async def cb_ban_user_apply_custom(
-    callback: CallbackQuery, state: FSMContext, bot: Bot
-) -> None:
+async def cb_ban_user_apply_custom(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     await state.clear()
     parts = callback.data.split(":")
@@ -959,13 +934,20 @@ async def cb_disease_set(callback: CallbackQuery) -> None:
 async def cb_stats(callback: CallbackQuery) -> None:
     s = await chats_repo.global_stats()
     active = await chats_repo.active_chat_count(active_days=(await get_config()).active_days)
-    text = texts.admin_global_stats(
-        s['chats'], s['users'], s['players'], s['total_size'], active
-    )
+    text = texts.admin_global_stats(s["chats"], s["users"], s["players"], s["total_size"], active)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
     )
     await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:economy")
+async def cb_economy(callback: CallbackQuery) -> None:
+    report = await economy_metrics.snapshot()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
+    )
+    await _edit(callback, texts.admin_economy(report), kb)
 
 
 # ---- global tunables panel (global admins only) ----
@@ -1239,13 +1221,11 @@ async def _bcast_send(bot: Bot, chat_id: int, text: str, thread_id: int | None) 
     Returns True on success, False on any other failure."""
     for _ in range(2):
         try:
-            await bot.send_message(
-                chat_id, text, parse_mode="HTML", message_thread_id=thread_id
-            )
+            await bot.send_message(chat_id, text, parse_mode="HTML", message_thread_id=thread_id)
             return True
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after)
-        except Exception:
+        except TelegramAPIError:
             return False
     return False
 
@@ -1280,9 +1260,7 @@ async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> N
     sent = 0
     failed = 0
     for chat_id in targets:
-        ok, reason, thread_id = await _send_to_resolved_thread(
-            bot, chat_id, text
-        )
+        ok, reason, thread_id = await _send_to_resolved_thread(bot, chat_id, text)
         sent += int(ok)
         failed += int(not ok)
         if ok and reason == "auto":
