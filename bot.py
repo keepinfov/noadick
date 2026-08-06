@@ -1,39 +1,44 @@
 import asyncio
 import logging
-import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, ErrorEvent
-from dotenv import load_dotenv
 
+from config import get_settings
 from db.engine import dispose_engine, init_db
 from handlers import admin, bank, dick, duel, help, modtools, ping, profile, settings, top
 from middlewares.registry import RegistryMiddleware
+from observability import LoggingContextMiddleware, configure_logging
+from services import backups, global_settings
 from services import bank as bank_service
-from services import global_settings
+
+logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    load_dotenv()
+    settings_config = get_settings()
+    configure_logging(settings_config.log_format)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-
+    if settings_config.db_path.exists() and settings_config.db_path.stat().st_size > 0:
+        migration_backup = await asyncio.to_thread(
+            backups.create_backup,
+            settings_config.db_path,
+            settings_config.backup_dir,
+            settings_config.backup_retention,
+        )
+        logger.info("Pre-migration database backup completed: %s", migration_backup.name)
     await init_db()
     await global_settings.refresh()
 
-    token = os.environ["BOT_TOKEN"]
-
-    proxy = os.environ.get("PROXY", "").strip()
+    token = settings_config.bot_token.get_secret_value()
+    proxy = settings_config.proxy
     if proxy:
         # Log only the host part (after '@'); never the user:pass credentials.
         safe_proxy = proxy.rsplit("@", 1)[-1] if "@" in proxy else proxy
-        logging.info("Proxy enabled: %s", safe_proxy)
+        logger.info("Proxy enabled: %s", safe_proxy)
         session = AiohttpSession(proxy=proxy)
     else:
         session = None
@@ -45,36 +50,65 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
+    dp.message.outer_middleware(LoggingContextMiddleware())
+    dp.callback_query.outer_middleware(LoggingContextMiddleware())
     dp.message.outer_middleware(RegistryMiddleware())
     dp.callback_query.outer_middleware(RegistryMiddleware())
 
     @dp.errors()
     async def on_error(event: ErrorEvent) -> bool:
-        logging.exception("Update handling failed: %s", event.exception, exc_info=event.exception)
+        logger.error("Update handling failed", exc_info=event.exception)
         return True
 
     dp.include_routers(
-        admin.router, settings.router, modtools.router, dick.router, duel.router,
-        bank.router, profile.router, top.router, help.router, ping.router,
+        admin.router,
+        settings.router,
+        modtools.router,
+        dick.router,
+        duel.router,
+        bank.router,
+        profile.router,
+        top.router,
+        help.router,
+        ping.router,
     )
 
-    await bot.set_my_commands([
-        BotCommand(command="dick", description="Испытать удачу"),
-        BotCommand(command="duel", description="Вызвать на дуэль (ответом)"),
-        BotCommand(command="me", description="Твой профиль и статистика"),
-        BotCommand(command="top", description="Топ-10 по размеру"),
-        BotCommand(command="bank", description="Банк: вклады и кредиты"),
-        BotCommand(command="corp", description="Счёт Корпорации"),
-        BotCommand(command="help", description="Список команд"),
-        BotCommand(command="ping", description="ping-pong"),
-    ])
+    await bot.set_my_commands(
+        [
+            BotCommand(command="dick", description="Испытать удачу"),
+            BotCommand(command="duel", description="Вызвать на дуэль (ответом)"),
+            BotCommand(command="me", description="Твой профиль и статистика"),
+            BotCommand(command="top", description="Топ-10 по размеру"),
+            BotCommand(command="bank", description="Банк: вклады и кредиты"),
+            BotCommand(command="corp", description="Счёт Корпорации"),
+            BotCommand(command="settings", description="Настройки чата (админам)"),
+            BotCommand(command="help", description="Список команд"),
+            BotCommand(command="ping", description="ping-pong"),
+        ]
+    )
 
-    collector = asyncio.create_task(_collector_loop(bot))
+    background_tasks = [
+        asyncio.create_task(_collector_loop(bot), name="bank-collector"),
+        asyncio.create_task(
+            backups.backup_loop(
+                settings_config.db_path,
+                settings_config.backup_dir,
+                settings_config.backup_interval_hours,
+                settings_config.backup_retention,
+            ),
+            name="database-backup",
+        ),
+        asyncio.create_task(
+            backups.heartbeat_loop(settings_config.heartbeat_path), name="heartbeat"
+        ),
+    ]
 
     try:
         await dp.start_polling(bot)
     finally:
-        collector.cancel()
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
         await bot.session.close()
         await dispose_engine()
 
@@ -88,7 +122,7 @@ async def _collector_loop(bot: Bot) -> None:
         try:
             await bank_service.run_collector_pass(bot)
         except Exception:
-            logging.exception("Bank collector pass failed")
+            logger.exception("Bank collector pass failed")
 
 
 if __name__ == "__main__":
