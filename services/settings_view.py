@@ -10,21 +10,19 @@ Callback stems are ``st:*`` so they can live in ``handlers/settings.py`` (no
 router-level filter) and be handled for both global admins (in DM) and local
 admins (in their group).
 """
+
 from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import texts
+from callbacks import SettingsCallback
 from services import settings
 
 
 def _nav_row(chat_id: int, scope: str) -> list[InlineKeyboardButton]:
     if scope == "global":
-        return [
-            InlineKeyboardButton(
-                text=texts.BTN_BACK_CHAT, callback_data=f"adm:chat:{chat_id}"
-            )
-        ]
+        return [InlineKeyboardButton(text=texts.BTN_BACK_CHAT, callback_data=f"adm:chat:{chat_id}")]
     return [InlineKeyboardButton(text=texts.BTN_CLOSE, callback_data="st:close")]
 
 
@@ -33,13 +31,13 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=texts.settings_btn_diseases(eff.diseases_enabled),
-                callback_data=f"st:tgl:dis:{chat_id}",
+                callback_data=SettingsCallback(action="diseases", chat_id=chat_id).pack(),
             )
         ],
         [
             InlineKeyboardButton(
                 text=texts.settings_btn_banking(eff.banking_enabled),
-                callback_data=f"st:tgl:bank:{chat_id}",
+                callback_data=SettingsCallback(action="banking", chat_id=chat_id).pack(),
             )
         ],
         [
@@ -49,10 +47,22 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
             )
         ],
         [
-            InlineKeyboardButton(text="−5", callback_data=f"st:adj:stake:{chat_id}:-5"),
-            InlineKeyboardButton(text="−1", callback_data=f"st:adj:stake:{chat_id}:-1"),
-            InlineKeyboardButton(text="+1", callback_data=f"st:adj:stake:{chat_id}:1"),
-            InlineKeyboardButton(text="+5", callback_data=f"st:adj:stake:{chat_id}:5"),
+            InlineKeyboardButton(
+                text="−5",
+                callback_data=SettingsCallback(action="stake", chat_id=chat_id, value="-5").pack(),
+            ),
+            InlineKeyboardButton(
+                text="−1",
+                callback_data=SettingsCallback(action="stake", chat_id=chat_id, value="-1").pack(),
+            ),
+            InlineKeyboardButton(
+                text="+1",
+                callback_data=SettingsCallback(action="stake", chat_id=chat_id, value="1").pack(),
+            ),
+            InlineKeyboardButton(
+                text="+5",
+                callback_data=SettingsCallback(action="stake", chat_id=chat_id, value="5").pack(),
+            ),
         ],
         [
             InlineKeyboardButton(
@@ -61,14 +71,35 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
             )
         ],
         [
-            InlineKeyboardButton(text="−30", callback_data=f"st:adj:to:{chat_id}:-30"),
-            InlineKeyboardButton(text="−10", callback_data=f"st:adj:to:{chat_id}:-10"),
-            InlineKeyboardButton(text="+10", callback_data=f"st:adj:to:{chat_id}:10"),
-            InlineKeyboardButton(text="+30", callback_data=f"st:adj:to:{chat_id}:30"),
+            InlineKeyboardButton(
+                text="−30",
+                callback_data=SettingsCallback(
+                    action="timeout", chat_id=chat_id, value="-30"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="−10",
+                callback_data=SettingsCallback(
+                    action="timeout", chat_id=chat_id, value="-10"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="+10",
+                callback_data=SettingsCallback(
+                    action="timeout", chat_id=chat_id, value="10"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="+30",
+                callback_data=SettingsCallback(
+                    action="timeout", chat_id=chat_id, value="30"
+                ).pack(),
+            ),
         ],
         [
             InlineKeyboardButton(
-                text=texts.settings_btn_tz(eff.tz), callback_data=f"st:tz:{chat_id}"
+                text=texts.settings_btn_tz(eff.tz),
+                callback_data=SettingsCallback(action="timezone", chat_id=chat_id).pack(),
             )
         ],
         _nav_row(chat_id, scope),
@@ -76,12 +107,13 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def render_settings(
-    chat_id: int, *, scope: str
-) -> tuple[str, InlineKeyboardMarkup]:
+async def render_settings(chat_id: int, *, scope: str) -> tuple[str, InlineKeyboardMarkup]:
     eff = await settings.get_effective(chat_id)
     text = texts.settings_screen(
-        eff.tz, eff.diseases_enabled, eff.duel_stake_default, eff.duel_timeout,
+        eff.tz,
+        eff.diseases_enabled,
+        eff.duel_stake_default,
+        eff.duel_timeout,
         eff.banking_enabled,
     )
     return text, settings_kb(chat_id, eff, scope=scope)

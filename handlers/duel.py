@@ -1,27 +1,30 @@
 import asyncio
 import html
+import logging
 import random
 import secrets
 import time
 
-from aiogram import Bot, F, Router
+from aiogram import Bot, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import texts
+from callbacks import DuelCallback
+from handlers import cooldowns
+from handlers.replies import reply_target
 from models.disease import (
     apply_duel_mod,
     check_expire,
     disease_tag,
     try_infect,
 )
-from handlers import cooldowns
-from handlers.replies import reply_target
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
 from services import bank, cooldown
 from services.global_settings import get_config_sync
 from services.settings import get_effective
-import texts
 from texts import (
     CORP_LINES,
     REACTION_TIERS,
@@ -31,6 +34,7 @@ from texts import (
 )
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 _duels: dict[str, dict] = {}
 # Strong refs to expiry tasks so they aren't garbage-collected mid-flight.
@@ -38,7 +42,7 @@ _expire_tasks: set[asyncio.Task] = set()
 
 
 def _mention(user_id: int, name: str) -> str:
-    return f"<a href=\"tg://user?id={user_id}\">{html.escape(name)}</a>"
+    return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
 
 async def _safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
@@ -49,9 +53,7 @@ async def _safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
         await callback.answer(text, show_alert=True)
 
 
-async def _expire_duel(
-    bot: Bot, chat_id: int, message_id: int, token: str, timeout: int
-) -> None:
+async def _expire_duel(bot: Bot, chat_id: int, message_id: int, token: str, timeout: int) -> None:
     await asyncio.sleep(timeout)
     if token not in _duels:
         return
@@ -62,8 +64,8 @@ async def _expire_duel(
             chat_id=chat_id,
             message_id=message_id,
         )
-    except Exception:
-        pass
+    except TelegramAPIError:
+        logger.info("Could not mark expired duel message")
 
 
 def _gen_token() -> str:
@@ -182,9 +184,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     # Cap simultaneous pending challenges from this user in this chat.
     pending = sum(
-        1
-        for d in _duels.values()
-        if d["chat_id"] == chat_id and d["attacker_id"] == user.id
+        1 for d in _duels.values() if d["chat_id"] == chat_id and d["attacker_id"] == user.id
     )
     if pending >= get_config_sync().max_pending_duels:
         await message.answer(texts.DUEL_TOO_MANY)
@@ -210,9 +210,13 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         return
 
     args = command.args
-    try:
-        stake = int(args.strip()) if args and args.strip().isdigit() else default_stake
-    except ValueError:
+    if args:
+        raw_stake = args.strip()
+        if not raw_stake.isdigit() or int(raw_stake) < 1:
+            await message.answer(texts.DUEL_BAD_STAKE)
+            return
+        stake = int(raw_stake)
+    else:
         stake = default_stake
 
     stake = max(1, min(stake, attacker_size))
@@ -271,7 +275,7 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
         "challenge_ts": challenge_ts,
         "timeout": duel_timeout,
     }
-    callback_data = f"duel:{token}"
+    callback_data = DuelCallback(token=token).pack()
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -281,16 +285,14 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
 
     sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
     _duels[token]["message_id"] = sent.message_id
-    task = asyncio.create_task(
-        _expire_duel(bot, chat_id, sent.message_id, token, duel_timeout)
-    )
+    task = asyncio.create_task(_expire_duel(bot, chat_id, sent.message_id, token, duel_timeout))
     _expire_tasks.add(task)
     task.add_done_callback(_expire_tasks.discard)
 
 
-@router.callback_query(F.data.startswith("duel:"))
-async def on_duel_accept(callback: CallbackQuery) -> None:
-    token = callback.data.split("duel:")[1]
+@router.callback_query(DuelCallback.filter())
+async def on_duel_accept(callback: CallbackQuery, callback_data: DuelCallback) -> None:
+    token = callback_data.token
     peek = _duels.get(token)
 
     if peek is None:
@@ -374,18 +376,25 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         if adjusted != base_chance and defender.get("disease"):
             dtag = defender.get("disease", {}).get("id", "")
             from models.disease import DISEASE_BY_ID
+
             d = DISEASE_BY_ID.get(dtag)
             if d:
-                disease_note_parts.append(texts.duel_disease_note(d.name, d.duel_mod, defender['name']))
+                disease_note_parts.append(
+                    texts.duel_disease_note(d.name, d.duel_mod, defender["name"])
+                )
         base_chance = adjusted
 
-        winner_is_attacker, victory_line, technique_line, reaction_comment, final_chance = _resolve_fight(
-            attacker_size, defender_size, elapsed,
-            _mention(data["attacker_id"], attacker["name"]),
-            _mention(data["defender_id"], defender["name"]),
-            attacker["name"],
-            defender["name"],
-            base_chance,
+        winner_is_attacker, victory_line, technique_line, reaction_comment, final_chance = (
+            _resolve_fight(
+                attacker_size,
+                defender_size,
+                elapsed,
+                _mention(data["attacker_id"], attacker["name"]),
+                _mention(data["defender_id"], defender["name"]),
+                attacker["name"],
+                defender["name"],
+                base_chance,
+            )
         )
 
         if winner_is_attacker:
@@ -436,14 +445,27 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         disease_note = "\n".join(disease_note_parts)
 
         result = _build_result_message(
-            victory_line, technique_line, steal_line,
-            attacker["name"], defender["name"],
-            attacker_size, storage[a_str]["size"],
-            defender_size, storage[d_str]["size"],
-            loser["name"], stake, winner_profit, corp_tax,
-            base_chance, final_chance,
-            reaction_comment, corp_line,
-            attacker_tag, defender_tag, disease_note, infection_msg,
+            victory_line,
+            technique_line,
+            steal_line,
+            attacker["name"],
+            defender["name"],
+            attacker_size,
+            storage[a_str]["size"],
+            defender_size,
+            storage[d_str]["size"],
+            loser["name"],
+            stake,
+            winner_profit,
+            corp_tax,
+            base_chance,
+            final_chance,
+            reaction_comment,
+            corp_line,
+            attacker_tag,
+            defender_tag,
+            disease_note,
+            infection_msg,
         )
         if duel_garnished:
             result += f"\n\n{texts.duel_garnished(duel_garnished)}"
@@ -463,17 +485,24 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         await E.ensure_baseline(chat_id, winner_id, winner_before, created_at=ts)
         await E.ensure_baseline(chat_id, loser_id, loser_before, created_at=ts)
         await E.log_event(
-            chat_id, winner_id, E.DUEL,
+            chat_id,
+            winner_id,
+            E.DUEL,
             delta=winner_after - winner_before,
             size_after=winner_after,
             meta={
-                "won": True, "opponent_id": loser_id, "stake": stake,
-                "profit": winner_profit, "tax": corp_tax,
+                "won": True,
+                "opponent_id": loser_id,
+                "stake": stake,
+                "profit": winner_profit,
+                "tax": corp_tax,
             },
             created_at=ts,
         )
         await E.log_event(
-            chat_id, loser_id, E.DUEL,
+            chat_id,
+            loser_id,
+            E.DUEL,
             delta=loser_after - loser_before,
             size_after=loser_after,
             meta={"won": False, "opponent_id": winner_id, "stake": stake},
@@ -481,7 +510,9 @@ async def on_duel_accept(callback: CallbackQuery) -> None:
         )
         if infection_msg:
             await E.log_event(
-                chat_id, loser_id, E.INFECTION,
+                chat_id,
+                loser_id,
+                E.INFECTION,
                 size_after=loser_after,
                 meta={"disease_id": loser.get("disease", {}).get("id")},
                 created_at=ts,

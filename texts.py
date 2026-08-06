@@ -7,6 +7,7 @@ etc.) stay in their own modules — only the *display* strings are centralized.
 The deliberately crude meme humour is intentional and preserved; only grammar,
 length, logic and term consistency were cleaned up.
 """
+
 from __future__ import annotations
 
 import html
@@ -37,6 +38,7 @@ def fmt_date(ts: int, tz: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------- /dick ---
+
 
 def dick_already_today(mention: str, size: int, rank: int, remaining: str) -> str:
     return (
@@ -74,6 +76,7 @@ def top_line(rank: int, name: str, tag: str, size: int) -> str:
 
 
 # ----------------------------------------------------------------------- /me ---
+
 
 def profile_not_played(mention: str) -> str:
     return f"{mention} ещё не играл. Измерь {DICK} командой /dick!"
@@ -126,7 +129,7 @@ def profile_deltas(n: int, spark: str) -> str:
 # ----------------------------------------------------- /me global profile ---
 
 GLOBAL_BUTTON = "🌐 Глобальный профиль"
-GLOBAL_EMPTY = "Ты ещё нигде не играл. Измерь {DICK} командой /dick в любом чате!".format(DICK=DICK)
+GLOBAL_EMPTY = f"Ты ещё нигде не играл. Измерь {DICK} командой /dick в любом чате!"
 
 
 def global_header(name: str) -> str:
@@ -192,10 +195,13 @@ HELP = (
     "/duel [ставка] — вызвать на дуэль (ответом на сообщение)\n"
     "/me — твой профиль и статистика\n"
     "/top — топ-10 по размеру\n"
+    "/bank — вклады, кредиты и текущий баланс\n"
+    "/corp — состояние Корпорации\n"
     "/ping — ping-pong\n"
     "/setbcast — (админам, внутри темы) выбрать тему для рассылок\n"
     "/unsetbcast — (админам) сбросить тему рассылок\n"
-    "/gameconfig — (админам) настройки чата: tz, болезни, дуэли\n"
+    "/settings — (админам) интерактивные настройки чата\n"
+    "/gameconfig — (админам) текстовый alias настроек\n"
     "/localban, /localunban — (админам) блокировка игрока в этом чате\n"
     "/resetleaderboard — (админам) обнулить таблицу чата"
 )
@@ -207,8 +213,7 @@ HELP_ADMIN = "\n\n/admin — панель глобального админис�
 
 BCAST_NOT_ADMIN = "Менять тему рассылки может только администратор чата."
 BCAST_NEED_TOPIC = (
-    "Выполни эту команду внутри нужной темы форума — именно туда будут "
-    "приходить рассылки."
+    "Выполни эту команду внутри нужной темы форума — именно туда будут приходить рассылки."
 )
 BCAST_SET = "✅ Эта тема выбрана для рассылок."
 BCAST_CLEARED = "Тема рассылки сброшена. Теперь будет использоваться самая активная тема."
@@ -218,10 +223,7 @@ BCAST_NOT_SET = "Тема рассылки и так не была задана.
 # ------------------------------------------------------------------ registry ---
 
 DM_GATE_BUTTON = "✍️ Написать боту"
-DM_GATE = (
-    "👋 Чтобы пользоваться ботом, сначала напиши ему в личку "
-    "(кнопка ниже, затем /start)."
-)
+DM_GATE = "👋 Чтобы пользоваться ботом, сначала напиши ему в личку (кнопка ниже, затем /start)."
 
 
 # ------------------------------------------------------- local moderation -------
@@ -232,6 +234,7 @@ LOCAL_BANNED = "🚫 Админ чата заблокировал тебя в э
 # Transient "you're on cooldown" reply — shown at most once per cooldown window
 # and self-deleted after a few seconds so it doesn't clutter the chat.
 COOLDOWN_NOTICE = "⏳ Не так быстро — команда на кулдауне. Подожди немного."
+CALLBACK_INVALID = "Эта кнопка устарела или повреждена. Открой панель заново."
 
 MOD_NEED_TARGET = (
     "Ответь командой на сообщение игрока или укажи его числовой id: "
@@ -377,6 +380,7 @@ DUEL_TIMED_OUT = "Вызов просрочен. Дуэль отменена."
 DUEL_SELF = "Нельзя вызвать на дуэль самого себя. Это было бы странно."
 DUEL_ACCEPT_BUTTON = "-- ПРИНЯТЬ ВЫЗОВ --"
 DUEL_TOO_MANY = "У тебя слишком много активных вызовов. Дождись их завершения."
+DUEL_BAD_STAKE = "Ставка должна быть целым числом больше нуля. Например: /duel 10"
 
 
 def duel_measure_first(mention: str) -> str:
@@ -506,6 +510,7 @@ ADMIN_TITLE = "🛠 Админ-панель"
 BTN_CHATS = "💬 Чаты"
 BTN_FIND = "🔎 Поиск игрока"
 BTN_STATS = "📊 Статистика"
+BTN_ECONOMY = "📈 Экономика"
 BTN_BCAST = "📢 Рассылка"
 BTN_HOME = "🏠 Меню"
 BTN_PREV = "« Назад"
@@ -516,6 +521,8 @@ BTN_LAST = "⏭"
 
 def pager_indicator(page: int, pages: int, total: int) -> str:
     return f"{page + 1}/{pages} ({total})"
+
+
 BTN_BACK_LIST = "« К списку"
 BTN_BACK_CHAT = "« К чату"
 BTN_BACK_FIND = "« К результатам поиска"
@@ -598,9 +605,7 @@ def admin_filter_note(filt: str, matches: int) -> str:
 BTN_CHAT_SETTINGS = "⚙️ Настройки"
 BTN_CLOSE = "✖️ Закрыть"
 SETTINGS_TITLE = "⚙️ <b>Настройки чата</b>"
-SETTINGS_ENTER_TZ = (
-    "Введи часовой пояс (например <code>Europe/Moscow</code>):"
-)
+SETTINGS_ENTER_TZ = "Введи часовой пояс (например <code>Europe/Moscow</code>):"
 SETTINGS_BAD_TZ = "Неизвестный часовой пояс. Пример: Europe/Moscow."
 SETTINGS_NOT_ALLOWED = "Только администраторы чата могут менять настройки."
 
@@ -730,7 +735,9 @@ def admin_player_line(name: str, tag: str, size: int, user_id: int) -> str:
     return f"{html.escape(name)}{tag} — {size} см (id {user_id})"
 
 
-def admin_player_header(name: str, tag: str, user_id: int, username: str, size: int, chat_id: int) -> str:
+def admin_player_header(
+    name: str, tag: str, user_id: int, username: str, size: int, chat_id: int
+) -> str:
     return (
         f"👤 <b>{html.escape(name)}</b>{tag}\n"
         f"id: {user_id} | {html.escape(username)}\n"
@@ -787,8 +794,7 @@ def health_reform_announcement(result) -> str:
         lines += ["", "<b>Сильнее всех заплыли:</b>"]
         for i, entry in enumerate(result.entries[:10], 1):
             lines.append(
-                f"{i}. {html.escape(entry.name)} — −{entry.cut} см "
-                f"({entry.before} → {entry.after})"
+                f"{i}. {html.escape(entry.name)} — −{entry.cut} см ({entry.before} → {entry.after})"
             )
         hidden = len(result.entries) - 10
         if hidden > 0:
@@ -864,15 +870,31 @@ def admin_chat_label(
     return title or str(chat_id)
 
 
-def admin_global_stats(
-    chats: int, users: int, players: int, total_size: int, active: int
-) -> str:
+def admin_global_stats(chats: int, users: int, players: int, total_size: int, active: int) -> str:
     return (
         "📊 <b>Глобальная статистика</b>\n"
         f"Чатов: {chats} (активных: {active})\n"
         f"Пользователей: {users}\n"
         f"Игроков (записей): {players}\n"
         f"Суммарный размер: {total_size} см"
+    )
+
+
+def admin_economy(report) -> str:
+    coverage = report.coverage_percent
+    coverage_flag = "норма" if coverage >= 100 else "дефицит"
+    return (
+        "📈 <b>Экономика</b>\n\n"
+        f"Игроков: {report.players}\n"
+        f"Ликвидно у игроков: {report.liquid} см\n"
+        f"Вклады: {report.deposits} + {report.deposit_interest} см процентов\n"
+        f"Долги игроков: {report.loans} см · просрочек: {report.defaults}\n"
+        f"Касса Корпорации: {report.corporation} см\n"
+        f"Покрытие вкладов: {coverage:.0f}% ({coverage_flag})\n\n"
+        f"Чистое изменение 7 дней: {report.net_delta_7d:+d} см "
+        f"({report.active_7d} игроков)\n"
+        f"Чистое изменение 30 дней: {report.net_delta_30d:+d} см "
+        f"({report.active_30d} игроков)"
     )
 
 
@@ -894,6 +916,7 @@ def ban_until_suffix(date_str: str) -> str:
 
 
 # ----------------------------------------------------- admin_actions results ---
+
 
 def res_size_set(name: str, size: int) -> str:
     return f"Размер {name} установлен на {size} см."
@@ -956,7 +979,10 @@ def _dur(seconds: int) -> str:
 
 BANK_TITLE = "🏦 <b>Банк «Корпорации»</b>"
 BANK_DISABLED = "🏦 Банк тут прикрыли. Иди ной админам, а Корпорации твои сопли до фонаря."
-BANK_GROUP_ONLY = "🏦 Банк пашет только в группах — там, где есть у кого отжать. В личке тебя и грабить лень."
+BANK_GROUP_ONLY = (
+    "🏦 Банк пашет только в группах — там, где есть у кого отжать. В личке тебя и грабить лень."
+)
+BANK_NOT_YOURS = "Эта банковская панель не твоя. Открой свою командой /bank."
 
 BTN_BANK_DEPOSIT = "💰 Вклад"
 BTN_BANK_LOAN = "🏦 Кредит"
@@ -979,17 +1005,14 @@ def bank_screen(s) -> str:
     if s.deposit:
         d = s.deposit
         status = "🔓 созрел" if d.matured else f"🔒 до созревания {_dur(d.matures_at - _now_ts())}"
-        lines.append(
-            f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} см) · {status}"
-        )
+        lines.append(f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} см) · {status}")
     else:
         lines.append("💰 Вклад: голяк. Деньги от тебя шарахаются, нищук.")
     if s.loan:
         ln = s.loan
         flag = "❗️ПРОСРОЧКА" if ln.defaulted else f"до сдачи {_dur(ln.due_at - _now_ts())}"
         lines.append(
-            f"🏦 Долг: <b>{ln.debt}</b> "
-            f"({ln.principal} тело + {ln.interest} проценты) · {flag}"
+            f"🏦 Долг: <b>{ln.debt}</b> ({ln.principal} тело + {ln.interest} проценты) · {flag}"
         )
     else:
         lines.append("🏦 Долг: чисто. Пока никому не должен, везунчик.")
@@ -1000,6 +1023,7 @@ def bank_screen(s) -> str:
 
 def _now_ts() -> int:
     import time as _t
+
     return int(_t.time())
 
 
@@ -1007,7 +1031,11 @@ def bank_dep_screen(s) -> str:
     lines = [BANK_TITLE, "", "💰 <b>Вклад</b>", ""]
     if s.deposit:
         d = s.deposit
-        status = "🔓 созрел — снимай без штрафа" if d.matured else f"🔒 ещё {_dur(d.matures_at - _now_ts())} под замком"
+        status = (
+            "🔓 созрел — снимай без штрафа"
+            if d.matured
+            else f"🔒 ещё {_dur(d.matures_at - _now_ts())} под замком"
+        )
         lines += [
             f"Тело: <b>{d.principal}</b>",
             f"Накапало: <b>{d.accrued}</b>",
@@ -1015,7 +1043,12 @@ def bank_dep_screen(s) -> str:
         ]
     else:
         lines.append("Вклада нет. Жмёшься, как последний скряга.")
-    lines += ["", f"На руках: {s.size}", "", "⚠️ Процент капает только в дни, когда ты тыкаешь /dick, потом быстро дохнет и упирается в потолок Корпорации. Дробная мелочь копится честно, но халявного +1 больше нет."]
+    lines += [
+        "",
+        f"На руках: {s.size}",
+        "",
+        "⚠️ Процент капает только в дни, когда ты тыкаешь /dick, потом быстро дохнет и упирается в потолок Корпорации. Дробная мелочь копится честно, но халявного +1 больше нет.",
+    ]
     return "\n".join(lines)
 
 
@@ -1023,11 +1056,21 @@ def bank_loan_screen(s) -> str:
     lines = [BANK_TITLE, "", "🏦 <b>Кредит</b>", ""]
     if s.loan:
         ln = s.loan
-        flag = "❗️ПРОСРОЧКА — Корпорация уже точит ножи" if ln.defaulted else f"вернуть за {_dur(ln.due_at - _now_ts())}"
+        flag = (
+            "❗️ПРОСРОЧКА — Корпорация уже точит ножи"
+            if ln.defaulted
+            else f"вернуть за {_dur(ln.due_at - _now_ts())}"
+        )
         lines += [f"Долг: <b>{ln.debt}</b> ({ln.principal} тело + {ln.interest} проценты)", flag]
     else:
         lines.append("Долгов нет. Пока не влез, терпила.")
-    lines += ["", f"На руках: {s.size}", f"Доступно взять: <b>{s.loan_limit}</b>", "", "⚠️ Не вернёшь в срок — выгрызем с /dick и с побед в дуэлях, а в ЛС прилетит такое письмо, что уши свернутся."]
+    lines += [
+        "",
+        f"На руках: {s.size}",
+        f"Доступно взять: <b>{s.loan_limit}</b>",
+        "",
+        "⚠️ Не вернёшь в срок — выгрызем с /dick и с побед в дуэлях, а в ЛС прилетит такое письмо, что уши свернутся.",
+    ]
     return "\n".join(lines)
 
 

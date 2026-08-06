@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import texts
+from callbacks import SettingsCallback
 from repositories import threads as threads_repo
 from services import settings, settings_view
 from services.admins import is_global_admin
 from services.chat_admin import IsChatAdmin, is_chat_admin
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 class SettingsStates(StatesGroup):
@@ -103,19 +107,34 @@ async def cb_st_noop(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "st:close")
-async def cb_st_close(callback: CallbackQuery, state: FSMContext) -> None:
+async def cb_st_close(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    chat = callback.message.chat if callback.message else None
+    user = callback.from_user
+    allowed = bool(user and is_global_admin(user.id))
+    if chat is not None and chat.type in {"group", "supergroup"} and user is not None:
+        allowed = await is_chat_admin(bot, chat.id, user.id)
+    if not allowed:
+        await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
+        return
     await state.clear()
     if callback.message is not None:
         try:
             await callback.message.delete()
-        except Exception:
-            pass
+        except TelegramAPIError:
+            logger.info("Could not delete settings panel")
     await callback.answer()
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "diseases"))
 @router.callback_query(F.data.startswith("st:tgl:dis:"))
-async def cb_st_toggle_diseases(callback: CallbackQuery, bot: Bot) -> None:
-    chat_id = int(callback.data.split(":")[3])
+async def cb_st_toggle_diseases(
+    callback: CallbackQuery, bot: Bot, callback_data: SettingsCallback | None = None
+) -> None:
+    try:
+        chat_id = callback_data.chat_id if callback_data else int(callback.data.split(":")[3])
+    except (AttributeError, IndexError, ValueError):
+        await callback.answer(texts.CALLBACK_INVALID, show_alert=True)
+        return
     if not await _may_edit_settings(callback, bot, chat_id):
         await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
         return
@@ -123,9 +142,16 @@ async def cb_st_toggle_diseases(callback: CallbackQuery, bot: Bot) -> None:
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "banking"))
 @router.callback_query(F.data.startswith("st:tgl:bank:"))
-async def cb_st_toggle_banking(callback: CallbackQuery, bot: Bot) -> None:
-    chat_id = int(callback.data.split(":")[3])
+async def cb_st_toggle_banking(
+    callback: CallbackQuery, bot: Bot, callback_data: SettingsCallback | None = None
+) -> None:
+    try:
+        chat_id = callback_data.chat_id if callback_data else int(callback.data.split(":")[3])
+    except (AttributeError, IndexError, ValueError):
+        await callback.answer(texts.CALLBACK_INVALID, show_alert=True)
+        return
     if not await _may_edit_settings(callback, bot, chat_id):
         await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
         return
@@ -133,33 +159,73 @@ async def cb_st_toggle_banking(callback: CallbackQuery, bot: Bot) -> None:
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(SettingsCallback.filter(F.action.in_({"stake", "timeout"})))
 @router.callback_query(F.data.startswith("st:adj:"))
-async def cb_st_adjust(callback: CallbackQuery, bot: Bot) -> None:
-    _, _, what, chat_id_s, delta_s = callback.data.split(":")
-    chat_id = int(chat_id_s)
+async def cb_st_adjust(
+    callback: CallbackQuery, bot: Bot, callback_data: SettingsCallback | None = None
+) -> None:
+    try:
+        if callback_data:
+            what, chat_id, delta = (
+                callback_data.action,
+                callback_data.chat_id,
+                int(callback_data.value),
+            )
+        else:
+            _, _, legacy_what, chat_id_s, delta_s = callback.data.split(":")
+            if legacy_what not in {"stake", "timeout"}:
+                raise ValueError("unknown setting")
+            what = legacy_what
+            chat_id, delta = int(chat_id_s), int(delta_s)
+    except (AttributeError, ValueError):
+        await callback.answer(texts.CALLBACK_INVALID, show_alert=True)
+        return
     if not await _may_edit_settings(callback, bot, chat_id):
         await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
         return
     key = "duel_stake" if what == "stake" else "duel_timeout"
     try:
-        await settings.adjust(chat_id, key, int(delta_s))
+        await settings.adjust(chat_id, key, delta)
     except settings.SettingError:
         await callback.answer()
         return
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "show"))
 @router.callback_query(F.data.startswith("st:show:"))
-async def cb_st_show(callback: CallbackQuery, state: FSMContext) -> None:
+async def cb_st_show(
+    callback: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+    callback_data: SettingsCallback | None = None,
+) -> None:
     # Re-open the settings panel (e.g. cancelling the TZ text prompt).
+    try:
+        chat_id = callback_data.chat_id if callback_data else int(callback.data.split(":")[2])
+    except (AttributeError, IndexError, ValueError):
+        await callback.answer(texts.CALLBACK_INVALID, show_alert=True)
+        return
+    if not await _may_edit_settings(callback, bot, chat_id):
+        await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
+        return
     await state.set_state(None)
-    chat_id = int(callback.data.split(":")[2])
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "timezone"))
 @router.callback_query(F.data.startswith("st:tz:"))
-async def cb_st_tz(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
-    chat_id = int(callback.data.split(":")[2])
+async def cb_st_tz(
+    callback: CallbackQuery,
+    bot: Bot,
+    state: FSMContext,
+    callback_data: SettingsCallback | None = None,
+) -> None:
+    try:
+        chat_id = callback_data.chat_id if callback_data else int(callback.data.split(":")[2])
+    except (AttributeError, IndexError, ValueError):
+        await callback.answer(texts.CALLBACK_INVALID, show_alert=True)
+        return
     if not await _may_edit_settings(callback, bot, chat_id):
         await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
         return
@@ -169,7 +235,12 @@ async def cb_st_tz(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None
         # Always offer a way out of the text-input prompt.
         cancel_kb = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data=f"st:show:{chat_id}")]
+                [
+                    InlineKeyboardButton(
+                        text=texts.BTN_CANCEL,
+                        callback_data=SettingsCallback(action="show", chat_id=chat_id).pack(),
+                    )
+                ]
             ]
         )
         await callback.message.edit_text(texts.SETTINGS_ENTER_TZ, reply_markup=cancel_kb)
@@ -179,16 +250,29 @@ async def cb_st_tz(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None
 @router.message(SettingsStates.set_tz)
 async def msg_set_tz(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    await state.clear()
     chat_id = data.get("tz_chat_id")
     scope = data.get("tz_scope", "local")
     if chat_id is None:
+        await state.clear()
         return
     value = (message.text or "").strip()
     try:
         await settings.set_setting(chat_id, "tz", value)
     except settings.SettingError:
-        await message.answer(texts.SETTINGS_BAD_TZ)
+        cancel_kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=texts.BTN_CANCEL,
+                        callback_data=SettingsCallback(action="show", chat_id=chat_id).pack(),
+                    )
+                ]
+            ]
+        )
+        await message.answer(
+            f"{texts.SETTINGS_BAD_TZ}\n\n{texts.SETTINGS_ENTER_TZ}", reply_markup=cancel_kb
+        )
         return
+    await state.clear()
     text, kb = await settings_view.render_settings(chat_id, scope=scope)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
