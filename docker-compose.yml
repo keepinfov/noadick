@@ -1,15 +1,47 @@
 services:
+  init-permissions:
+    build: .
+    user: "0:0"
+    command: ["sh", "-c", "mkdir -p /app/data /app/storage && chown -R 10001:10001 /app/data /app/storage"]
+    restart: "no"
+    network_mode: "none"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage
+
   bot:
     build: .
     restart: unless-stopped
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
     environment:
       TZ: "Europe/Moscow"
-      PYTHONUNBUFFERED: "1"
       BOT_TOKEN: "${BOT_TOKEN}"
       ADMIN_IDS: "${ADMIN_IDS:-}"
       PROXY: "${PROXY:-}"
       DB_PATH: "/app/data/bot.db"
       STORAGE_PATH: "/app/storage"
+      BACKUP_DIR: "/app/data/backups"
+      BACKUP_INTERVAL_HOURS: "${BACKUP_INTERVAL_HOURS:-24}"
+      BACKUP_RETENTION: "${BACKUP_RETENTION:-7}"
+      LOG_FORMAT: "${LOG_FORMAT:-json}"
+      HEARTBEAT_PATH: "/tmp/noadick/heartbeat"
     volumes:
       - ./data:/app/data
       - ./storage:/app/storage
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
