@@ -50,6 +50,7 @@ EDITABLE_BANK: list[tuple[str, str, int, int, int, int]] = [
     ("loan_max_base_pct", "Кредит: лимит (% size)", 10, 50, 0, 1000),
     ("loan_min", "Кредит: минимум (стартовый)", 5, 15, 0, 100000),
     ("loan_term_days", "Кредит: срок (дней)", 1, 5, 1, 365),
+    ("dick_debt_term_days", "Долг за /dick: срок (дней)", 1, 3, 1, 365),
     ("loan_garnish_pct", "Кредит: гарнишмент /dick (%)", 5, 25, 0, 100),
     ("loan_deny_cooldown_sec", "Кредит: КД после отказа (сек)", 300, 1800, 0, 604800),
     ("loan_duel_garnish_pct", "Кредит: гарнишмент дуэли (%)", 5, 25, 0, 100),
@@ -87,6 +88,7 @@ DEFAULTS: dict[str, int] = {
     "loan_max_base_pct": 50,
     "loan_min": 15,
     "loan_term_days": 7,
+    "dick_debt_term_days": 3,
     "loan_garnish_pct": 50,
     "loan_deny_cooldown_sec": 1800,
     "loan_duel_garnish_pct": 50,
@@ -122,6 +124,7 @@ class GlobalConfig:
     loan_max_base_pct: int
     loan_min: int
     loan_term_days: int
+    dick_debt_term_days: int
     loan_garnish_pct: int
     loan_deny_cooldown_sec: int
     loan_duel_garnish_pct: int

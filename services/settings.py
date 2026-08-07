@@ -19,6 +19,7 @@ _TTL = 300  # seconds
 
 DEFAULT_DISEASES_ENABLED = True
 DEFAULT_BANKING_ENABLED = True
+DEFAULT_POKER_ENABLED = True
 DEFAULT_DUEL_STAKE = 5
 DEFAULT_DUEL_TIMEOUT = 60
 
@@ -29,7 +30,7 @@ MIN_DUEL_TIMEOUT = 10
 MAX_DUEL_TIMEOUT = 600
 
 # User-facing /gameconfig keys.
-SETTING_KEYS = ("tz", "diseases", "duel_stake", "duel_timeout")
+SETTING_KEYS = ("tz", "diseases", "poker", "duel_stake", "duel_timeout")
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class EffectiveSettings:
     tz: str
     diseases_enabled: bool
     banking_enabled: bool
+    poker_enabled: bool
     duel_stake_default: int
     duel_timeout: int
 
@@ -64,6 +66,7 @@ async def get_effective(chat_id: int) -> EffectiveSettings:
             tz=_env_tz(),
             diseases_enabled=DEFAULT_DISEASES_ENABLED,
             banking_enabled=DEFAULT_BANKING_ENABLED,
+            poker_enabled=DEFAULT_POKER_ENABLED,
             duel_stake_default=DEFAULT_DUEL_STAKE,
             duel_timeout=DEFAULT_DUEL_TIMEOUT,
         )
@@ -72,6 +75,7 @@ async def get_effective(chat_id: int) -> EffectiveSettings:
             tz=row.tz or _env_tz(),
             diseases_enabled=bool(row.diseases_enabled),
             banking_enabled=bool(row.banking_enabled),
+            poker_enabled=bool(row.poker_enabled),
             duel_stake_default=int(row.duel_stake_default),
             duel_timeout=int(row.duel_timeout),
         )
@@ -116,11 +120,12 @@ async def set_setting(chat_id: int, key: str, raw_value: str) -> None:
             raise SettingError("bad_tz") from None
         await repo.upsert_settings(chat_id, tz=raw_value.strip())
 
-    elif key == "diseases":
+    elif key in {"diseases", "poker"}:
         parsed = _parse_bool(raw_value)
         if parsed is None:
             raise SettingError("bad_bool")
-        await repo.upsert_settings(chat_id, diseases_enabled=parsed)
+        field = "diseases_enabled" if key == "diseases" else "poker_enabled"
+        await repo.upsert_settings(chat_id, **{field: parsed})
 
     elif key == "duel_stake":
         if not raw_value.strip().isdigit():
@@ -171,5 +176,13 @@ async def toggle_banking(chat_id: int) -> bool:
     eff = await get_effective(chat_id)
     new_val = not eff.banking_enabled
     await repo.upsert_settings(chat_id, banking_enabled=new_val)
+    invalidate(chat_id)
+    return new_val
+
+
+async def toggle_poker(chat_id: int) -> bool:
+    eff = await get_effective(chat_id)
+    new_val = not eff.poker_enabled
+    await repo.upsert_settings(chat_id, poker_enabled=new_val)
     invalidate(chat_id)
     return new_val

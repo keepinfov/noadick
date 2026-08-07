@@ -226,6 +226,9 @@ async def size_timeline(chat_id: int, user_id: int) -> list[tuple[int, int]]:
             E.LOAN_REPAY,
             E.LOAN_GARNISH,
             E.HEALTH_REFORM,
+            E.POKER_BUYIN,
+            E.POKER_TOPUP,
+            E.POKER_CASHOUT,
         ],
     )
     return [(e.created_at, e.size_after) for e in evs]

@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -90,6 +91,7 @@ class Corporation(Base):
     total_interest_earned: Mapped[int] = mapped_column(Integer, default=0)
     total_interest_paid: Mapped[int] = mapped_column(Integer, default=0)
     total_penalties: Mapped[int] = mapped_column(Integer, default=0)
+    total_poker_rake: Mapped[int] = mapped_column(Integer, default=0)
     rules_url_rude: Mapped[str] = mapped_column(String, default="")
     rules_url_strict: Mapped[str] = mapped_column(String, default="")
     deposits_reconciled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -136,6 +138,10 @@ class Loan(Base):
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     principal: Mapped[int] = mapped_column(Integer, default=0)
+    # Portion of principal created by negative /dick rolls rather than cash
+    # borrowed from the Corporation. It follows the same due/default/recovery
+    # machinery but is shown separately to the player and in economy reports.
+    roll_debt_principal: Mapped[int] = mapped_column(Integer, default=0)
     accrued_interest: Mapped[int] = mapped_column(Integer, default=0)
     opened_at: Mapped[int] = mapped_column(Integer, default=_now)
     due_at: Mapped[int] = mapped_column(Integer, default=0)
@@ -269,6 +275,7 @@ class GlobalSettings(Base):
     loan_max_base_pct: Mapped[int] = mapped_column(Integer, default=50)
     loan_min: Mapped[int] = mapped_column(Integer, default=15)
     loan_term_days: Mapped[int] = mapped_column(Integer, default=7)
+    dick_debt_term_days: Mapped[int] = mapped_column(Integer, default=3)
     loan_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
     loan_deny_cooldown_sec: Mapped[int] = mapped_column(Integer, default=1800)
     loan_duel_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
@@ -287,6 +294,130 @@ class ChatSettings(Base):
     tz: Mapped[str | None] = mapped_column(String, nullable=True)
     diseases_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     banking_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    poker_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     duel_stake_default: Mapped[int] = mapped_column(Integer, default=5)
     duel_timeout: Mapped[int] = mapped_column(Integer, default=60)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class PokerTable(Base):
+    """Persistent Telegram poker room.
+
+    Money rooms use ``chat_id`` as their bankroll namespace. Practice rooms
+    have a NULL chat and never touch Player or Event rows.
+    """
+
+    __tablename__ = "poker_tables"
+    __table_args__ = (
+        Index("ix_poker_tables_location", "chat_id", "thread_id", "status"),
+        Index("ix_poker_tables_host", "host_id", "status"),
+    )
+
+    table_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16), default="money")
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    host_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    host_name: Mapped[str] = mapped_column(String(64), default="")
+    access_mode: Mapped[str] = mapped_column(String(16), default="approval")
+    max_seats: Mapped[int] = mapped_column(Integer, default=5)
+    buy_in: Mapped[int] = mapped_column(Integer, default=40)
+    small_blind: Mapped[int] = mapped_column(Integer, default=1)
+    big_blind: Mapped[int] = mapped_column(Integer, default=2)
+    turn_timeout: Mapped[int] = mapped_column(Integer, default=60)
+    status: Mapped[str] = mapped_column(String(16), default="lobby")
+    board_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    hand_no: Mapped[int] = mapped_column(Integer, default=0)
+    dealer_seat: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    settings_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    close_after_hand: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_event: Mapped[str] = mapped_column(String(256), default="")
+    host_active_at: Mapped[int] = mapped_column(Integer, default=_now)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class PokerSeat(Base):
+    __tablename__ = "poker_seats"
+    __table_args__ = (
+        Index(
+            "uq_poker_active_user",
+            "user_id",
+            unique=True,
+            sqlite_where=sql_text("status = 'active'"),
+        ),
+        Index("ix_poker_seats_table_status", "table_id", "status", "seat_no"),
+    )
+
+    table_id: Mapped[str] = mapped_column(
+        String(12), ForeignKey("poker_tables.table_id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    seat_no: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    stack: Mapped[int] = mapped_column(Integer, default=0)
+    committed: Mapped[int] = mapped_column(Integer, default=0)
+    total_buyin: Mapped[int] = mapped_column(Integer, default=0)
+    ready: Mapped[bool] = mapped_column(Boolean, default=False)
+    sitting_out: Mapped[bool] = mapped_column(Boolean, default=False)
+    pending_leave: Mapped[bool] = mapped_column(Boolean, default=False)
+    pending_kick: Mapped[bool] = mapped_column(Boolean, default=False)
+    consecutive_timeouts: Mapped[int] = mapped_column(Integer, default=0)
+    dm_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    turn_notice_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    turn_notice_version: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    joined_at: Mapped[int] = mapped_column(Integer, default=_now)
+    left_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class PokerJoinRequest(Base):
+    __tablename__ = "poker_join_requests"
+    __table_args__ = (Index("ix_poker_requests_table_status", "table_id", "status"),)
+
+    table_id: Mapped[str] = mapped_column(
+        String(12), ForeignKey("poker_tables.table_id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    expires_at: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class PokerInvite(Base):
+    __tablename__ = "poker_invites"
+    __table_args__ = (Index("ix_poker_invites_table", "table_id"),)
+
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    table_id: Mapped[str] = mapped_column(
+        String(12), ForeignKey("poker_tables.table_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    remaining_uses: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class PokerHand(Base):
+    __tablename__ = "poker_hands"
+    __table_args__ = (
+        Index("ix_poker_hands_table_status", "table_id", "status"),
+        Index("uq_poker_hand_no", "table_id", "hand_no", unique=True),
+    )
+
+    hand_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    table_id: Mapped[str] = mapped_column(
+        String(12), ForeignKey("poker_tables.table_id", ondelete="CASCADE")
+    )
+    hand_no: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    street: Mapped[str] = mapped_column(String(16), default="preflop")
+    state: Mapped[dict] = mapped_column(JSON)
+    deadline: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[int] = mapped_column(Integer, default=_now)
+    finished_at: Mapped[int | None] = mapped_column(Integer, nullable=True)

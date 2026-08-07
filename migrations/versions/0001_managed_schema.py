@@ -30,12 +30,17 @@ _LEGACY_COLUMNS: dict[str, list[sa.Column]] = {
         sa.Column("loans_repaid", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("loans_defaulted", sa.Integer(), nullable=False, server_default="0"),
     ],
+    "loans": [
+        sa.Column("roll_debt_principal", sa.Integer(), nullable=False, server_default="0"),
+    ],
     "chat_settings": [
         sa.Column("banking_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("poker_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
     ],
     "corporation": [
         sa.Column("deposits_reconciled", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("bank_rebalanced_v2", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("total_poker_rake", sa.Integer(), nullable=False, server_default="0"),
     ],
     "deposits": [
         sa.Column("last_confisc_day", sa.String(), nullable=False, server_default=""),
@@ -54,6 +59,7 @@ _LEGACY_COLUMNS: dict[str, list[sa.Column]] = {
         sa.Column("loan_max_base_pct", sa.Integer(), nullable=False, server_default="50"),
         sa.Column("loan_min", sa.Integer(), nullable=False, server_default="15"),
         sa.Column("loan_term_days", sa.Integer(), nullable=False, server_default="7"),
+        sa.Column("dick_debt_term_days", sa.Integer(), nullable=False, server_default="3"),
         sa.Column("loan_garnish_pct", sa.Integer(), nullable=False, server_default="50"),
         sa.Column("loan_deny_cooldown_sec", sa.Integer(), nullable=False, server_default="1800"),
         sa.Column("loan_duel_garnish_pct", sa.Integer(), nullable=False, server_default="50"),
@@ -105,9 +111,9 @@ def _reconcile_deposits(bind: sa.Connection) -> None:
         bind.execute(
             sa.text(
                 "INSERT INTO corporation (id, balance, total_tax, total_interest_earned, "
-                "total_interest_paid, total_penalties, rules_url_rude, rules_url_strict, "
-                "updated_at, deposits_reconciled, bank_rebalanced_v2) "
-                "VALUES (1, :balance, 0, 0, 0, 0, '', '', :now, 1, 0)"
+                "total_interest_paid, total_penalties, total_poker_rake, rules_url_rude, "
+                "rules_url_strict, updated_at, deposits_reconciled, bank_rebalanced_v2) "
+                "VALUES (1, :balance, 0, 0, 0, 0, 0, '', '', :now, 1, 0)"
             ),
             {"balance": int(total), "now": int(time.time())},
         )

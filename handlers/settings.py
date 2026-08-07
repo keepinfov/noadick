@@ -159,6 +159,18 @@ async def cb_st_toggle_banking(
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "poker"))
+async def cb_st_toggle_poker(
+    callback: CallbackQuery, bot: Bot, callback_data: SettingsCallback
+) -> None:
+    chat_id = callback_data.chat_id
+    if not await _may_edit_settings(callback, bot, chat_id):
+        await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
+        return
+    await settings.toggle_poker(chat_id)
+    await _rerender(callback, chat_id)
+
+
 @router.callback_query(SettingsCallback.filter(F.action.in_({"stake", "timeout"})))
 @router.callback_query(F.data.startswith("st:adj:"))
 async def cb_st_adjust(

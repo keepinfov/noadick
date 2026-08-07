@@ -101,9 +101,16 @@ async def cmd_dick(message: Message) -> None:
 
         before = player["size"]
         delta = apply_growth_mod(player, rolled)
-        player["size"] += delta
-        if player["size"] < 0:
-            player["size"] = 0
+        debt_added = 0
+        debt_due_at = 0
+        debt_defaulted = False
+        if delta < 0:
+            debt_added = -delta
+            debt_due_at, debt_defaulted = await bank.charge_dick_debt_on_dict(
+                chat_id, user_id, debt_added
+            )
+        else:
+            player["size"] += delta
         player["last"] = int(now.timestamp())
         player["name"] = user.first_name
         storage[uid_str] = player
@@ -126,7 +133,9 @@ async def cmd_dick(message: Message) -> None:
         rank = _rank(storage, user_id)
         remaining = _time_until_midnight(now)
 
-        if delta >= 0:
+        if debt_added:
+            change_text = texts.dick_debt_assessed(debt_added, debt_due_at, debt_defaulted)
+        elif delta >= 0:
             change_text = texts.dick_grew(delta)
         else:
             change_text = texts.dick_shrank(delta)

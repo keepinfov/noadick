@@ -42,6 +42,12 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                text=texts.settings_btn_poker(eff.poker_enabled),
+                callback_data=SettingsCallback(action="poker", chat_id=chat_id).pack(),
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text=texts.settings_label_stake(eff.duel_stake_default),
                 callback_data="st:noop",
             )
@@ -115,5 +121,6 @@ async def render_settings(chat_id: int, *, scope: str) -> tuple[str, InlineKeybo
         eff.duel_stake_default,
         eff.duel_timeout,
         eff.banking_enabled,
+        eff.poker_enabled,
     )
     return text, settings_kb(chat_id, eff, scope=scope)
