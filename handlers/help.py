@@ -1,5 +1,6 @@
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 import texts
@@ -12,7 +13,11 @@ router = Router()
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, command: CommandObject) -> None:
+async def cmd_start(message: Message, command: CommandObject, state: FSMContext) -> None:
+    # A plain /start is also the universal escape hatch from unfinished input
+    # forms. Deep-link /start payloads are handled by their feature routers
+    # before this generic handler.
+    await state.clear()
     if command.args == "me" and message.from_user:
         await _send_global_profile(message, message.from_user.id, message.from_user.first_name)
         return

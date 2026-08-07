@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -109,6 +111,27 @@ def test_uncalled_excess_is_returned_without_rake() -> None:
     engine._settle(state, showdown=False)
     assert state["result"]["rake"] == 5  # only the contested 100-sm layer
     assert state["players"]["1"]["stack"] == 145
+
+
+async def test_custom_config_explains_the_actual_invalid_field() -> None:
+    from handlers import poker as poker_handler
+
+    user_id = 77
+    poker_handler._new_draft(user_id, mode="practice")
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=user_id),
+        text="10 1 2 5 60",
+        answer=AsyncMock(),
+    )
+    state = AsyncMock()
+    try:
+        await poker_handler.poker_custom_config(message, state)
+    finally:
+        poker_handler._drafts.pop(user_id, None)
+
+    reply = message.answer.await_args.args[0]
+    assert "нужно хотя бы 20 см" in reply
+    state.clear.assert_not_awaited()
 
 
 @pytest.fixture

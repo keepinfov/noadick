@@ -155,10 +155,11 @@ def _poker_error(exc: Exception) -> str:
 
 
 @router.message(Command("poker"))
-async def cmd_poker(message: Message, bot: Bot) -> None:
+async def cmd_poker(message: Message, bot: Bot, state: FSMContext) -> None:
     user = message.from_user
     if user is None:
         return
+    await state.clear()
     if message.chat.type == "private":
         active = await repo.get_active_seat(user.id)
         if active is not None:
@@ -420,7 +421,7 @@ async def poker_create_callback(callback: CallbackQuery, state: FSMContext, bot:
     await callback.answer()
 
 
-@router.message(PokerStates.custom_config)
+@router.message(PokerStates.custom_config, F.text, ~F.text.startswith("/"))
 async def poker_custom_config(message: Message, state: FSMContext) -> None:
     user = message.from_user
     if user is None:
@@ -431,10 +432,24 @@ async def poker_custom_config(message: Message, state: FSMContext) -> None:
         return
     parts = (message.text or "").split()
     try:
+        if len(parts) != 5:
+            raise ValueError
         buy_in, small, big, seats, timeout = map(int, parts)
+    except ValueError:
+        await message.answer(
+            f"Нужно ровно пять целых чисел, а не эта числовая каша.\n\n{texts.POKER_CUSTOM_CONFIG}"
+        )
+        return
+    try:
         game.validate_config(buy_in, small, big, seats, timeout)
-    except (ValueError, repo.PokerRepoError):
-        await message.answer(f"Не принял настройки.\n\n{texts.POKER_CUSTOM_CONFIG}")
+    except repo.PokerRepoError as exc:
+        reason = _poker_error(exc)
+        if str(exc) == "buyin_too_small":
+            reason = (
+                f"Бай-ин {buy_in} см слишком дохлый для большого блайнда {big}: "
+                f"нужно хотя бы {big * 10} см."
+            )
+        await message.answer(f"{reason}\n\n{texts.POKER_CUSTOM_CONFIG}")
         return
     draft.update(
         preset="custom",
@@ -891,7 +906,7 @@ async def poker_action(callback: CallbackQuery, state: FSMContext, bot: Bot) -> 
     await refresh_table(bot, table_id)
 
 
-@router.message(PokerStates.custom_raise)
+@router.message(PokerStates.custom_raise, F.text, ~F.text.startswith("/"))
 async def poker_custom_raise(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     try:
@@ -979,7 +994,7 @@ async def poker_table_action(callback: CallbackQuery, state: FSMContext, bot: Bo
     await refresh_table(bot, table_id)
 
 
-@router.message(PokerStates.top_up)
+@router.message(PokerStates.top_up, F.text, ~F.text.startswith("/"))
 async def poker_topup_message(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     try:
