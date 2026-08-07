@@ -68,6 +68,35 @@ def dick_debt_assessed(amount: int, due_at: int, defaulted: bool) -> str:
     )
 
 
+def dick_pisyago_assessed(loss: int, covered: int, debt: int, due_at: int, defaulted: bool) -> str:
+    if debt <= 0:
+        return (
+            f"обмяк на {loss} см, но ПИСЯГО признало это страховым случаем и "
+            f"прикрыло все {covered} см — долг нулевой, позор полноценный"
+        )
+    if defaulted:
+        return (
+            f"обмяк на {loss} см; ПИСЯГО прикрыло {covered}, а оставшиеся {debt} см "
+            "Корпорация пришила к твоей уже просроченной долговой заднице"
+        )
+    return (
+        f"обмяк на {loss} см; ПИСЯГО прикрыло {covered}, а оставшиеся {debt} см "
+        f"ушли в долг до {fmt_datetime(due_at)}"
+    )
+
+
+def dick_pisyago_status(result) -> str:
+    if result.remaining <= 0:
+        return (
+            f"🛡 ПИСЯГО выскоблено досуха; запас вернётся {fmt_datetime(result.reset_at)}. "
+            "До тех пор страхуйся молитвой, финансовый огрызок."
+        )
+    return (
+        f"🛡 ПИСЯГО: покрытие {result.coverage_pct}%, в запасе ещё "
+        f"{result.remaining} см до {fmt_datetime(result.reset_at)}."
+    )
+
+
 def dick_result(mention: str, change_text: str, size: int, rank: int, remaining: str) -> str:
     return (
         f"{mention}, твой {DICK} {change_text}.\n"
@@ -1003,7 +1032,9 @@ def admin_economy(report) -> str:
         f"Чистое изменение 7 дней: {report.net_delta_7d:+d} см "
         f"({report.active_7d} игроков)\n"
         f"Чистое изменение 30 дней: {report.net_delta_30d:+d} см "
-        f"({report.active_30d} игроков)"
+        f"({report.active_30d} игроков)\n"
+        f"ПИСЯГО прикрыло: {report.pisyago_covered_7d} см за 7 дней · "
+        f"{report.pisyago_covered_30d} см за 30 дней"
     )
 
 
@@ -1111,6 +1142,28 @@ BTN_AMOUNT_ALL = "Всё"
 
 def bank_screen(s) -> str:
     lines = [BANK_TITLE, "", f"💪 На руках (ликвидно): <b>{s.size}</b>"]
+    insurance = s.pisyago
+    if insurance.limit <= 0 or insurance.threshold <= 0:
+        lines.append("🛡 ПИСЯГО: отключено. Корпорация убрала памперсы даже у нищих.")
+    elif insurance.coverage_pct > 0:
+        window = (
+            f"до {fmt_datetime(insurance.reset_at)}"
+            if insurance.reset_at
+            else "период начнётся с первой выплаты"
+        )
+        lines.append(
+            f"🛡 ПИСЯГО: <b>{insurance.coverage_pct}%</b> · запас "
+            f"<b>{insurance.remaining}/{insurance.limit}</b> см · {window}"
+        )
+        lines.append(
+            f"↳ Учтённые активы: {insurance.assets}/{insurance.threshold} см. "
+            "Вклад и покерный стек не спрячешь, хитрожопый актуарий."
+        )
+    else:
+        lines.append(
+            f"🛡 ПИСЯГО: не положено — активов {insurance.assets} см при пороге "
+            f"{insurance.threshold}. Страховой сосок уже не по размеру."
+        )
     if s.deposit:
         d = s.deposit
         status = (
@@ -1282,6 +1335,10 @@ def profile_bank(s) -> str | None:
         flag = "❗просрочка" if s.loan.defaulted else "в срок"
         roll = f", /dick: {s.loan.roll_debt}" if s.loan.roll_debt else ""
         parts.append(f"долг {s.loan.debt} ({flag}{roll})")
+    if s.pisyago.coverage_pct > 0:
+        parts.append(
+            f"ПИСЯГО {s.pisyago.coverage_pct}% ({s.pisyago.remaining}/{s.pisyago.limit} см)"
+        )
     if not parts and s.loans_repaid == 0 and s.loans_defaulted == 0:
         return None
     rating = f"рейтинг +{s.loans_repaid}/−{s.loans_defaulted}"
@@ -1291,6 +1348,11 @@ def profile_bank(s) -> str | None:
 
 ADMIN_GSET_BANK_TITLE = "🏦 <b>Настройки банка</b>\nСтавки и сроки едины для всех чатов."
 BTN_GSET_BANK = "🏦 Настройки банка"
+ADMIN_GSET_INSURANCE_TITLE = (
+    "🛡 <b>Настройки ПИСЯГО</b>\n"
+    "Страховка смягчает отрицательный /dick игрокам с активами ниже порога."
+)
+BTN_GSET_INSURANCE = "🛡 Настройки ПИСЯГО"
 
 
 def res_chat_unbanned(chat_id: int) -> str:

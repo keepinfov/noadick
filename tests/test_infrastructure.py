@@ -99,5 +99,8 @@ def test_economy_simulation_is_deterministic_and_validates_inputs() -> None:
 
     assert first == second
     assert first.p10 <= first.median <= first.p90
+    uninsured = simulate_growth(30, 0, trials=100, seed=7, insurance_limit=0)
+    insured = simulate_growth(30, 0, trials=100, seed=7)
+    assert insured.mean_roll_debt < uninsured.mean_roll_debt
     with pytest.raises(ValueError):
         simulate_growth(30, 50, trials=0)

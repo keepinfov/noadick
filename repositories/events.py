@@ -33,6 +33,7 @@ POKER_CASHOUT = "poker_cashout"
 POKER_RESULT = "poker_result"
 POKER_RAKE = "poker_rake"
 DICK_DEBT = "dick_debt"
+PISYAGO = "pisyago"
 
 
 async def log_event(

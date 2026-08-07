@@ -72,6 +72,11 @@ class Player(Base):
     # Credit history feeding the loan-limit multiplier (see services/bank.py).
     loans_repaid: Mapped[int] = mapped_column(Integer, default=0)
     loans_defaulted: Mapped[int] = mapped_column(Integer, default=0)
+    # PISYAGO is a renewable safety net for poor players. ``insurance_used``
+    # counts covered centimetres in the current fixed window; reset_at starts
+    # with the first covered loss, so idle players do not burn their allowance.
+    insurance_used: Mapped[int] = mapped_column(Integer, default=0)
+    insurance_reset_at: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
@@ -276,6 +281,9 @@ class GlobalSettings(Base):
     loan_min: Mapped[int] = mapped_column(Integer, default=15)
     loan_term_days: Mapped[int] = mapped_column(Integer, default=7)
     dick_debt_term_days: Mapped[int] = mapped_column(Integer, default=3)
+    dick_insurance_threshold: Mapped[int] = mapped_column(Integer, default=20)
+    dick_insurance_limit: Mapped[int] = mapped_column(Integer, default=20)
+    dick_insurance_period_days: Mapped[int] = mapped_column(Integer, default=7)
     loan_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
     loan_deny_cooldown_sec: Mapped[int] = mapped_column(Integer, default=1800)
     loan_duel_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)

@@ -35,6 +35,7 @@ from aiogram.exceptions import TelegramAPIError
 from repositories import bank as repo
 from repositories import events as E
 from repositories import players as players_repo
+from repositories import poker as poker_repo
 from services import cooldown
 from services.global_settings import GlobalConfig, get_config_sync
 
@@ -122,6 +123,24 @@ def loan_interest_accrued(principal: int, full_days: int, cfg: GlobalConfig) -> 
     return int(principal * (cfg.loan_rate_pct / 100) * full_days)
 
 
+def pisyago_coverage_pct(assets: int, threshold: int) -> int:
+    """Return the progressive PISYAGO coverage tier for gross assets.
+
+    Four equal quarters of the configured threshold map to 100/75/50/25%.
+    Gross assets are deliberate: debts never make a rich borrower look poor.
+    """
+    assets = max(0, assets)
+    if threshold <= 0 or assets >= threshold:
+        return 0
+    if assets * 4 < threshold:
+        return 100
+    if assets * 4 < threshold * 2:
+        return 75
+    if assets * 4 < threshold * 3:
+        return 50
+    return 25
+
+
 # --------------------------------------------------------------------------- #
 # Read model for the panel / profile.
 # --------------------------------------------------------------------------- #
@@ -147,6 +166,27 @@ class LoanView:
 
 
 @dataclass
+class PisyagoView:
+    assets: int
+    threshold: int
+    coverage_pct: int
+    remaining: int
+    limit: int
+    reset_at: int
+
+
+@dataclass(frozen=True)
+class PisyagoResult:
+    loss: int
+    assets: int
+    coverage_pct: int
+    covered: int
+    debt: int
+    remaining: int
+    reset_at: int
+
+
+@dataclass
 class BankSummary:
     size: int
     deposit: DepositView | None
@@ -154,6 +194,7 @@ class BankSummary:
     loans_repaid: int
     loans_defaulted: int
     loan_limit: int
+    pisyago: PisyagoView
 
 
 async def get_summary(chat_id: int, user_id: int) -> BankSummary:
@@ -173,6 +214,26 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
             matured=_now() >= dep_row.matures_at,
             active_days=dep_row.active_days_count,
         )
+
+    poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
+    deposit_assets = (
+        dep_row.principal + dep_row.accrued if dep_row is not None and dep_row.principal > 0 else 0
+    )
+    assets = max(0, size) + deposit_assets + poker_stack
+    now = _now()
+    window_active = bool(player and player.insurance_reset_at > now)
+    used = max(0, int(player.insurance_used)) if window_active and player else 0
+    insurance_limit = max(0, cfg.dick_insurance_limit)
+    pisyago = PisyagoView(
+        assets=assets,
+        threshold=cfg.dick_insurance_threshold,
+        coverage_pct=(
+            pisyago_coverage_pct(assets, cfg.dick_insurance_threshold) if insurance_limit > 0 else 0
+        ),
+        remaining=max(0, insurance_limit - used),
+        limit=insurance_limit,
+        reset_at=int(player.insurance_reset_at) if window_active and player else 0,
+    )
 
     loan_row = await repo.get_loan(chat_id, user_id)
     loan_view = None
@@ -199,6 +260,7 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
         loans_repaid=repaid,
         loans_defaulted=defaulted_n,
         loan_limit=available,
+        pisyago=pisyago,
     )
 
 
@@ -219,6 +281,76 @@ class BankError(Exception):
 class OpResult:
     amount: int
     extra: int = 0  # penalty / interest / forfeit, depending on the op
+
+
+async def apply_pisyago_on_dict(chat_id: int, user_id: int, loss: int) -> PisyagoResult:
+    """Cover part of a negative /dick roll for a low-asset player.
+
+    The caller owns the per-chat lock. The allowance window starts on the first
+    actually covered centimetre and renews after the configured period. Only
+    liquid size, deposits and real-money poker escrow count as assets; debt is
+    intentionally ignored rather than subtracted.
+    """
+    if loss <= 0:
+        raise ValueError("loss must be positive")
+
+    cfg = get_config_sync()
+    player = await players_repo.get_player(chat_id, user_id)
+    deposit = await repo.get_deposit(chat_id, user_id)
+    poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
+    liquid = max(0, int(player.size)) if player else 0
+    deposit_assets = max(0, int(deposit.principal)) + max(0, int(deposit.accrued)) if deposit else 0
+    assets = liquid + deposit_assets + poker_stack
+
+    limit = max(0, cfg.dick_insurance_limit)
+    coverage_pct = pisyago_coverage_pct(assets, cfg.dick_insurance_threshold) if limit > 0 else 0
+    now = _now()
+    reset_at = int(player.insurance_reset_at) if player else 0
+    used = max(0, int(player.insurance_used)) if player else 0
+    if reset_at <= now:
+        used = 0
+        reset_at = 0
+
+    nominal_cover = loss * coverage_pct // 100
+    covered = min(nominal_cover, max(0, limit - used))
+    if covered > 0:
+        if reset_at == 0:
+            reset_at = now + cfg.dick_insurance_period_days * DAY
+        used += covered
+        await players_repo.set_player_fields(
+            chat_id,
+            user_id,
+            insurance_used=used,
+            insurance_reset_at=reset_at,
+        )
+
+    debt = loss - covered
+    remaining = max(0, limit - used)
+    result = PisyagoResult(
+        loss=loss,
+        assets=assets,
+        coverage_pct=coverage_pct,
+        covered=covered,
+        debt=debt,
+        remaining=remaining,
+        reset_at=reset_at,
+    )
+    if covered > 0:
+        await E.log_event(
+            chat_id,
+            user_id,
+            E.PISYAGO,
+            meta={
+                "loss": loss,
+                "assets": assets,
+                "coverage_pct": coverage_pct,
+                "covered": covered,
+                "debt": debt,
+                "remaining": remaining,
+                "reset_at": reset_at,
+            },
+        )
+    return result
 
 
 # --------------------------------------------------------------------------- #

@@ -109,6 +109,11 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text=texts.BTN_GSET_BANK, callback_data="adm:gsetbank"),
             ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_GSET_INSURANCE, callback_data="adm:gsetinsurance"
+                ),
+            ],
         ]
     )
 
@@ -1003,6 +1008,30 @@ async def render_gset_bank() -> tuple[str, InlineKeyboardMarkup]:
     return texts.ADMIN_GSET_BANK_TITLE, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def render_gset_insurance() -> tuple[str, InlineKeyboardMarkup]:
+    cfg = await get_config()
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, label, small, big, _mn, _mx in global_settings.EDITABLE_INSURANCE:
+        val = getattr(cfg, key)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.gset_field_label(label, val), callback_data="adm:noop"
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"−{big}", callback_data=f"adm:gadji:{key}:{-big}"),
+                InlineKeyboardButton(text=f"−{small}", callback_data=f"adm:gadji:{key}:{-small}"),
+                InlineKeyboardButton(text=f"+{small}", callback_data=f"adm:gadji:{key}:{small}"),
+                InlineKeyboardButton(text=f"+{big}", callback_data=f"adm:gadji:{key}:{big}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
+    return texts.ADMIN_GSET_INSURANCE_TITLE, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.callback_query(F.data == "adm:gsetbank")
 async def cb_gset_bank(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
@@ -1019,6 +1048,25 @@ async def cb_gadj_bank(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     text, kb = await render_gset_bank()
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:gsetinsurance")
+async def cb_gset_insurance(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    text, kb = await render_gset_insurance()
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:gadji:"))
+async def cb_gadj_insurance(callback: CallbackQuery) -> None:
+    _, _, key, delta = callback.data.split(":")
+    try:
+        await global_settings.adjust(key, int(delta))
+    except KeyError:
+        await callback.answer()
+        return
+    text, kb = await render_gset_insurance()
     await _edit(callback, text, kb)
 
 

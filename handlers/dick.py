@@ -104,11 +104,14 @@ async def cmd_dick(message: Message) -> None:
         debt_added = 0
         debt_due_at = 0
         debt_defaulted = False
+        pisyago: bank.PisyagoResult | None = None
         if delta < 0:
-            debt_added = -delta
-            debt_due_at, debt_defaulted = await bank.charge_dick_debt_on_dict(
-                chat_id, user_id, debt_added
-            )
+            pisyago = await bank.apply_pisyago_on_dict(chat_id, user_id, -delta)
+            debt_added = pisyago.debt
+            if debt_added:
+                debt_due_at, debt_defaulted = await bank.charge_dick_debt_on_dict(
+                    chat_id, user_id, debt_added
+                )
         else:
             player["size"] += delta
         player["last"] = int(now.timestamp())
@@ -133,7 +136,15 @@ async def cmd_dick(message: Message) -> None:
         rank = _rank(storage, user_id)
         remaining = _time_until_midnight(now)
 
-        if debt_added:
+        if pisyago is not None and pisyago.covered:
+            change_text = texts.dick_pisyago_assessed(
+                pisyago.loss,
+                pisyago.covered,
+                pisyago.debt,
+                debt_due_at,
+                debt_defaulted,
+            )
+        elif debt_added:
             change_text = texts.dick_debt_assessed(debt_added, debt_due_at, debt_defaulted)
         elif delta >= 0:
             change_text = texts.dick_grew(delta)
@@ -149,6 +160,11 @@ async def cmd_dick(message: Message) -> None:
             text += f"\n{texts.dick_garnished(garnished)}"
         if dep_interest:
             text += f"\n{texts.dick_deposit_interest(dep_interest)}"
+        if pisyago is not None and (
+            pisyago.covered
+            or (pisyago.coverage_pct > 0 and pisyago.reset_at > 0 and pisyago.remaining == 0)
+        ):
+            text += f"\n{texts.dick_pisyago_status(pisyago)}"
 
         await save_storage(chat_id, storage)
 
@@ -160,7 +176,11 @@ async def cmd_dick(message: Message) -> None:
             E.DICK,
             delta=player["size"] - before,
             size_after=player["size"],
-            meta={"rolled": rolled},
+            meta={
+                "rolled": rolled,
+                "pisyago_covered": pisyago.covered if pisyago else 0,
+                "roll_debt": debt_added,
+            },
             created_at=ts,
         )
         if infection:

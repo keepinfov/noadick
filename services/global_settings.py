@@ -58,7 +58,15 @@ EDITABLE_BANK: list[tuple[str, str, int, int, int, int]] = [
     ("reminder_cooldown_sec", "Напоминание: КД (сек)", 1800, 3600, 0, 604800),
 ]
 
-_ALL_EDITABLE = EDITABLE + EDITABLE_BANK
+# PISYAGO gets a compact sub-panel of its own: adding its controls to the bank
+# panel would cross Telegram's 100-button limit.
+EDITABLE_INSURANCE: list[tuple[str, str, int, int, int, int]] = [
+    ("dick_insurance_threshold", "ПИСЯГО: порог активов (см)", 1, 5, 0, 100000),
+    ("dick_insurance_limit", "ПИСЯГО: запас на период (см)", 1, 5, 0, 100000),
+    ("dick_insurance_period_days", "ПИСЯГО: период (дней)", 1, 7, 1, 365),
+]
+
+_ALL_EDITABLE = EDITABLE + EDITABLE_BANK + EDITABLE_INSURANCE
 BOUNDS: dict[str, tuple[int, int]] = {k: (mn, mx) for k, _, _, _, mn, mx in _ALL_EDITABLE}
 LABELS: dict[str, str] = {k: lbl for k, lbl, _, _, _, _ in _ALL_EDITABLE}
 
@@ -89,6 +97,9 @@ DEFAULTS: dict[str, int] = {
     "loan_min": 15,
     "loan_term_days": 7,
     "dick_debt_term_days": 3,
+    "dick_insurance_threshold": 20,
+    "dick_insurance_limit": 20,
+    "dick_insurance_period_days": 7,
     "loan_garnish_pct": 50,
     "loan_deny_cooldown_sec": 1800,
     "loan_duel_garnish_pct": 50,
@@ -125,6 +136,9 @@ class GlobalConfig:
     loan_min: int
     loan_term_days: int
     dick_debt_term_days: int
+    dick_insurance_threshold: int
+    dick_insurance_limit: int
+    dick_insurance_period_days: int
     loan_garnish_pct: int
     loan_deny_cooldown_sec: int
     loan_duel_garnish_pct: int

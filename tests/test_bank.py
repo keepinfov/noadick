@@ -108,6 +108,27 @@ def test_loan_interest_accrued():
     assert bank.loan_interest_accrued(100, 0, c) == 0
 
 
+@pytest.mark.parametrize(
+    ("assets", "expected"),
+    [
+        (0, 100),
+        (4, 100),
+        (5, 75),
+        (9, 75),
+        (10, 50),
+        (14, 50),
+        (15, 25),
+        (19, 25),
+        (20, 0),
+        (100, 0),
+    ],
+)
+def test_pisyago_coverage_tiers(assets: int, expected: int):
+    from services import bank
+
+    assert bank.pisyago_coverage_pct(assets, threshold=20) == expected
+
+
 # --------------------------------------------------------------------------- #
 # DB-backed async ops.
 # --------------------------------------------------------------------------- #
@@ -182,6 +203,78 @@ async def test_negative_dick_charge_becomes_timed_loan_without_cutting_size(db):
     assert defaulted is False
     events = await events_repo.get_events(CHAT, USER, types=[events_repo.DICK_DEBT])
     assert events[0].meta["amount"] == 7
+
+
+async def test_pisyago_covers_poor_players_and_caps_the_period_allowance(db):
+    from repositories import events as events_repo
+    from repositories import players as players_repo
+    from services import bank
+
+    await _seed_player(0)
+    first = await bank.apply_pisyago_on_dict(CHAT, USER, 10)
+    assert (first.assets, first.coverage_pct, first.covered, first.debt) == (0, 100, 10, 0)
+    assert first.remaining == 10
+
+    await players_repo.set_player_fields(CHAT, USER, size=8)
+    second = await bank.apply_pisyago_on_dict(CHAT, USER, 10)
+    assert (second.assets, second.coverage_pct, second.covered, second.debt) == (8, 75, 7, 3)
+    assert second.remaining == 3
+
+    third = await bank.apply_pisyago_on_dict(CHAT, USER, 10)
+    assert (third.covered, third.debt, third.remaining) == (3, 7, 0)
+    player = await players_repo.get_player(CHAT, USER)
+    assert player.insurance_used == 20
+    assert player.insurance_reset_at == first.reset_at
+    events = await events_repo.get_events(CHAT, USER, types=[events_repo.PISYAGO])
+    assert [event.meta["covered"] for event in events] == [10, 7, 3]
+
+
+async def test_pisyago_counts_deposits_and_renews_an_expired_allowance(db):
+    import time
+
+    from repositories import players as players_repo
+    from services import bank
+
+    await _seed_player(20)
+    await bank.open_deposit(CHAT, USER, 20)
+    hidden = await bank.apply_pisyago_on_dict(CHAT, USER, 10)
+    assert hidden.assets == 20
+    assert (hidden.coverage_pct, hidden.covered, hidden.debt) == (0, 0, 10)
+
+    await bank.withdraw_deposit(CHAT, USER, None)
+    await players_repo.set_player_fields(
+        CHAT,
+        USER,
+        size=0,
+        insurance_used=20,
+        insurance_reset_at=int(time.time()) - 1,
+    )
+    renewed = await bank.apply_pisyago_on_dict(CHAT, USER, 10)
+    assert (renewed.covered, renewed.debt, renewed.remaining) == (10, 0, 10)
+    assert renewed.reset_at > int(time.time())
+
+
+async def test_pisyago_counts_real_money_poker_escrow(db):
+    from services import bank, poker
+
+    await _seed_player(20)
+    table = await poker.create_table(
+        mode="money",
+        chat_id=CHAT,
+        thread_id=None,
+        host_id=USER,
+        host_name="Застрахованный",
+        access_mode="open",
+        buy_in=20,
+        small_blind=1,
+        big_blind=2,
+        max_seats=2,
+        timeout=60,
+    )
+    result = await bank.apply_pisyago_on_dict(CHAT, USER, 10)
+    assert result.assets == 20
+    assert (result.coverage_pct, result.covered, result.debt) == (0, 0, 10)
+    await poker.close(table.table_id, USER)
 
 
 async def test_negative_dick_charge_joins_existing_credit_and_keeps_its_due_date(db):

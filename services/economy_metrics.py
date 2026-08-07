@@ -4,11 +4,13 @@ import random
 import time
 from dataclasses import dataclass
 
-from sqlalchemy import case, distinct, func, select
+from sqlalchemy import Integer, case, cast, distinct, func, select
 
 from db.engine import get_session_factory
 from db.models import Corporation, Deposit, Event, Loan, Player, PokerSeat, PokerTable
 from models.disease import DISEASE_CHANCE, DISEASES
+from repositories.events import PISYAGO
+from services.bank import pisyago_coverage_pct
 from services.game import WEIGHTED_RANGES
 
 
@@ -34,6 +36,8 @@ class EconomySnapshot:
     net_delta_30d: int
     active_7d: int
     active_30d: int
+    pisyago_covered_7d: int
+    pisyago_covered_30d: int
 
     @property
     def deposit_liability(self) -> int:
@@ -207,6 +211,22 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
 
         delta_7d, active_7d = await event_window(7)
         delta_30d, active_30d = await event_window(30)
+
+        async def pisyago_window(days: int) -> int:
+            covered = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(cast(func.json_extract(Event.meta, "$.covered"), Integer)),
+                            0,
+                        )
+                    ).where(Event.created_at >= now - days * 86400, Event.type == PISYAGO)
+                )
+            ).scalar_one()
+            return int(covered)
+
+        pisyago_7d = await pisyago_window(7)
+        pisyago_30d = await pisyago_window(30)
         return EconomySnapshot(
             players=int(players),
             liquid=int(liquid),
@@ -228,6 +248,8 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
             net_delta_30d=delta_30d,
             active_7d=active_7d,
             active_30d=active_30d,
+            pisyago_covered_7d=pisyago_7d,
+            pisyago_covered_30d=pisyago_30d,
         )
 
 
@@ -238,8 +260,18 @@ def simulate_growth(
     trials: int = 5_000,
     seed: int = 20260804,
     diseases_enabled: bool = True,
+    insurance_threshold: int = 20,
+    insurance_limit: int = 20,
+    insurance_period_days: int = 7,
 ) -> GrowthSimulation:
-    if days < 0 or initial_size < 0 or trials < 1:
+    if (
+        days < 0
+        or initial_size < 0
+        or trials < 1
+        or insurance_threshold < 0
+        or insurance_limit < 0
+        or insurance_period_days < 1
+    ):
         raise ValueError("days and initial_size must be non-negative; trials must be positive")
     rng = random.Random(seed)
     ranges, weights = zip(*WEIGHTED_RANGES, strict=True)
@@ -251,7 +283,12 @@ def simulate_growth(
         disease = None
         disease_days_left = 0
         roll_debt = 0
+        insurance_used = 0
+        insurance_reset_day: int | None = None
         for _day in range(days):
+            if insurance_reset_day is not None and _day >= insurance_reset_day:
+                insurance_used = 0
+                insurance_reset_day = None
             if disease_days_left <= 0:
                 disease = None
             selected = rng.choices(ranges, weights=weights, k=1)[0]
@@ -259,7 +296,15 @@ def simulate_growth(
             if disease is not None:
                 delta = max(0, int(delta * disease.growth_mod))
             if delta < 0:
-                roll_debt += -delta
+                loss = -delta
+                coverage = pisyago_coverage_pct(size, insurance_threshold)
+                nominal_cover = loss * coverage // 100
+                covered = min(nominal_cover, max(0, insurance_limit - insurance_used))
+                if covered:
+                    if insurance_reset_day is None:
+                        insurance_reset_day = _day + insurance_period_days
+                    insurance_used += covered
+                roll_debt += loss - covered
             else:
                 size += delta
             disease_days_left -= 1
