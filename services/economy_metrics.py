@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import Integer, case, cast, distinct, func, select
 
 from db.engine import get_session_factory
-from db.models import Corporation, Deposit, Event, Loan, Player, PokerSeat, PokerTable
+from db.models import ChatCorporation, Deposit, Event, Loan, Player, PokerSeat, PokerTable
 from models.disease import DISEASE_CHANCE, DISEASES
 from repositories.events import PISYAGO
 from services.bank import pisyago_coverage_pct
@@ -196,7 +196,13 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
                 )
             )
         ).one()
-        corporation = await session.get(Corporation, 1)
+        corporation = await session.scalar(
+            select(
+                func.coalesce(
+                    func.sum(ChatCorporation.balance + ChatCorporation.insurance_reserve), 0
+                )
+            )
+        )
 
         async def event_window(days: int) -> tuple[int, int]:
             net, active = (
@@ -243,7 +249,7 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
             loans_due_24h=int(loan_due_24h),
             loans_due_7d=int(loan_due_7d),
             loans_later=int(loan_later),
-            corporation=int(corporation.balance if corporation else 0),
+            corporation=int(corporation or 0),
             net_delta_7d=delta_7d,
             net_delta_30d=delta_30d,
             active_7d=active_7d,

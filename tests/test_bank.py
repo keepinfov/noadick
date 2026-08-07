@@ -108,6 +108,13 @@ def test_loan_interest_accrued():
     assert bank.loan_interest_accrued(100, 0, c) == 0
 
 
+def test_catastrophic_range_is_only_minus_179():
+    from services.game import WEIGHTED_RANGES
+
+    assert ((-179, -179), 0.0001) in WEIGHTED_RANGES
+    assert all(not (lo <= -178 <= hi) for (lo, hi), _weight in WEIGHTED_RANGES)
+
+
 @pytest.mark.parametrize(
     ("assets", "expected"),
     [
@@ -282,7 +289,7 @@ async def test_negative_dick_charge_joins_existing_credit_and_keeps_its_due_date
     from services import bank
 
     await _seed_player(50)
-    await repo.corp_apply(delta=100)
+    await repo.corp_apply(CHAT, delta=100)
     await bank.take_loan(CHAT, USER, 10)
     original = await repo.get_loan(CHAT, USER)
 
@@ -318,7 +325,7 @@ async def test_withdraw_early_penalty(db):
     assert res.amount == 100 - penalty
     assert res.extra == penalty  # no accrued interest yet
 
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(CHAT)
     assert corp.total_penalties == penalty
     assert corp.balance == penalty
 
@@ -329,7 +336,7 @@ async def test_accrue_deposit_idempotent_per_day(db):
 
     await _seed_player(1000)
     await bank.open_deposit(CHAT, USER, 1000)
-    await repo.corp_apply(delta=10_000)  # the till must have cash to pay interest
+    await repo.corp_apply(CHAT, delta=10_000)  # the till must have cash to pay interest
     first = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03")
     assert first > 0
     again = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03")
@@ -406,11 +413,11 @@ async def test_deposit_interest_capped_by_empty_corp(db):
 
     await _seed_player(1000)
     await bank.open_deposit(CHAT, USER, 1000)  # principal funds the till (+1000)
-    await repo.corp_apply(delta=-1000)  # but drain it dry before accrual
+    await repo.corp_apply(CHAT, delta=-1000)  # but drain it dry before accrual
     # Corporation is broke → it pays nothing and the house never goes negative.
     interest = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03")
     assert interest == 0
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(CHAT)
     assert corp.balance == 0  # never lent itself into the red
     # The active day is NOT consumed, so the depositor can still earn later.
     dep = await repo.get_deposit(CHAT, USER)
@@ -423,11 +430,12 @@ async def test_deposit_interest_paid_from_funded_corp(db):
 
     await _seed_player(1000)
     await bank.open_deposit(CHAT, USER, 1000)  # principal funds the till (+1000)
-    await repo.corp_apply(delta=10_000)  # plus extra house profit
+    await repo.corp_apply(CHAT, delta=10_000)  # plus extra house profit
     interest = await bank.accrue_deposit_on_play(CHAT, USER, "2026-06-03")
     assert interest > 0
-    corp = await repo.get_corp()
-    assert corp.balance == 11_000 - interest
+    corp = await repo.get_corp(CHAT)
+    # Accrual creates a liability; cash moves only on actual withdrawal.
+    assert corp.balance == 11_000
     assert corp.total_interest_paid == interest
 
 
@@ -439,7 +447,7 @@ async def test_bad_credit_rejection_locks_out_reapply(db):
     # Two defaults zero the credit multiplier → history rejection, regardless of a
     # funded till.
     await _seed_player(1000, loans_defaulted=2)
-    await repo.corp_apply(delta=10_000)
+    await repo.corp_apply(CHAT, delta=10_000)
     with pytest.raises(bank.BankError) as e:
         await bank.take_loan(CHAT, USER, 50)
     assert e.value.code == "no_credit"
@@ -461,7 +469,7 @@ async def test_take_loan_needs_funded_corp(db):
         await bank.take_loan(CHAT, USER, 50)
     assert e.value.code == "corp_broke"
 
-    await repo.corp_apply(delta=10_000)  # fund the till
+    await repo.corp_apply(CHAT, delta=10_000)  # fund the till
     res = await bank.take_loan(CHAT, USER, 1000)  # over credit limit (50% of 100) → 50
     assert res.amount == 50
 
@@ -471,7 +479,7 @@ async def test_take_loan_needs_funded_corp(db):
     assert player.size == 150  # 100 liquid + 50 borrowed
     loan = await repo.get_loan(CHAT, USER)
     assert loan.principal == 50
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(CHAT)
     assert corp.balance == 10_000 - 50  # cash left the vault
 
     with pytest.raises(bank.BankError) as e:
@@ -484,19 +492,19 @@ async def test_loan_capped_by_corp_funds(db):
     from services import bank
 
     await _seed_player(100)  # credit limit 100
-    await repo.corp_apply(delta=30)  # but the till only has 30
+    await repo.corp_apply(CHAT, delta=30)  # but the till only has 30
     res = await bank.take_loan(CHAT, USER, 100)
     assert res.amount == 30  # can't borrow more than the house holds
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(CHAT)
     assert corp.balance == 0
 
 
-async def test_repay_full_clears_and_bumps_history(db):
+async def test_repay_full_immediately_does_not_bump_history(db):
     from repositories import bank as repo
     from services import bank
 
     await _seed_player(200)  # 50% credit limit → 100
-    await repo.corp_apply(delta=100)  # fund the till exactly
+    await repo.corp_apply(CHAT, delta=100)  # fund the till exactly
     await bank.take_loan(CHAT, USER, 100)  # size now 300, till now 0
     # Add some interest so we can check it routes to the Corporation.
     await repo.upsert_loan(CHAT, USER, accrued_interest=20)
@@ -510,10 +518,104 @@ async def test_repay_full_clears_and_bumps_history(db):
 
     player = await players_repo.get_player(CHAT, USER)
     assert player.size == 180  # 300 - 120
-    assert player.loans_repaid == 1
-    corp = await repo.get_corp()
+    assert player.loans_repaid == 0
+    corp = await repo.get_corp(CHAT)
     assert corp.total_interest_earned == 20
     assert corp.balance == 120  # principal refilled the till (0+100) + 20 interest
+
+
+async def test_qualified_three_day_loan_bumps_history_once_per_window(db, monkeypatch):
+    from repositories import bank as repo
+    from repositories import players as players_repo
+    from services import bank
+
+    now = 2_000_000
+    monkeypatch.setattr(bank, "_now", lambda: now)
+    await _seed_player(200)
+    await repo.corp_apply(CHAT, delta=200)
+    await bank.take_loan(CHAT, USER, 100)
+    await repo.upsert_loan(CHAT, USER, opened_at=now - 3 * bank.DAY, due_at=now + bank.DAY)
+    await bank.repay_loan(CHAT, USER, None)
+    assert (await players_repo.get_player(CHAT, USER)).loans_repaid == 1
+
+    await bank.take_loan(CHAT, USER, 100)
+    await repo.upsert_loan(CHAT, USER, opened_at=now - 3 * bank.DAY, due_at=now + bank.DAY)
+    await bank.repay_loan(CHAT, USER, None)
+    assert (await players_repo.get_player(CHAT, USER)).loans_repaid == 1
+
+
+async def test_sekasko_premium_is_ringfenced_and_bailin_preserves_only_body(db):
+    from repositories import bank as repo
+    from repositories import players as players_repo
+    from services import bank
+
+    await _seed_player(200)
+    await bank.open_deposit(CHAT, USER, 100)
+    policy = await bank.buy_sekasko(CHAT, USER, 40)
+    assert (policy.amount, policy.extra) == (40, 2)
+    corp = await repo.get_corp(CHAT)
+    assert (corp.balance, corp.insurance_reserve) == (100, 2)
+    assert (await players_repo.get_player(CHAT, USER)).size == 98
+
+    await repo.upsert_deposit(CHAT, USER, accrued=7)
+    await repo.corp_apply(CHAT, delta=-100)
+    with pytest.raises(bank.BankError) as error:
+        await bank.withdraw_deposit(CHAT, USER, None)
+    assert error.value.code == "corp_sanation"
+    await bank._bail_in(CHAT, bank._now())
+    dep = await repo.get_deposit(CHAT, USER)
+    assert (dep.principal, dep.accrued) == (40, 0)
+    corp = await repo.get_corp(CHAT)
+    assert corp.status == "recovery"
+    assert corp.total_bailin == 67
+
+
+async def test_positive_dick_uses_emission_then_only_local_cash(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(1)
+    await repo.corp_apply(CHAT, delta=10)
+    result = await bank.fund_positive_dick(CHAT, USER, 7)
+    assert (result.emitted, result.corporation_paid, result.credited, result.clipped) == (
+        3,
+        4,
+        7,
+        0,
+    )
+    assert (await repo.get_corp(CHAT)).balance == 6
+
+    other = CHAT - 1
+    clipped = await bank.fund_positive_dick(other, USER, 7)
+    assert (clipped.emitted, clipped.corporation_paid, clipped.clipped) == (3, 0, 4)
+    assert (await repo.get_corp(other)).balance == 0
+
+
+async def test_local_corporation_migration_splits_legacy_till_by_deposits(db):
+    from sqlalchemy import text
+
+    from db import engine as engine_mod
+    from repositories import bank as repo
+    from repositories import players as players_repo
+
+    other = CHAT - 1
+    await players_repo.set_player_fields(CHAT, USER, size=1)
+    await players_repo.set_player_fields(other, USER, size=1)
+    await repo.upsert_deposit(CHAT, USER, principal=100)
+    await repo.upsert_deposit(other, USER, principal=300)
+    async with engine_mod.get_engine().begin() as conn:
+        await conn.execute(text("UPDATE corporation SET balance = 100 WHERE id = 1"))
+        await conn.execute(text("DELETE FROM chat_corporations"))
+        await conn.execute(
+            text("UPDATE alembic_version SET version_num = '0003_pisyago_insurance'")
+        )
+    await engine_mod.dispose_engine()
+    await engine_mod.init_db()
+
+    assert (await repo.get_corp(CHAT)).balance == 25
+    assert (await repo.get_corp(other)).balance == 75
+    async with engine_mod.get_engine().connect() as conn:
+        assert await conn.scalar(text("SELECT balance FROM corporation WHERE id = 1")) == 0
 
 
 async def test_garnish_only_when_defaulted(db):
@@ -521,7 +623,7 @@ async def test_garnish_only_when_defaulted(db):
     from services import bank
 
     await _seed_player(100)
-    await repo.corp_apply(delta=100)  # fund the till
+    await repo.corp_apply(CHAT, delta=100)  # fund the till
     await bank.take_loan(CHAT, USER, 100)  # not defaulted yet
 
     pdict = {"size": 100}
@@ -542,7 +644,7 @@ async def test_garnish_clearing_default_does_not_credit_history(db):
     from services import bank
 
     await _seed_player(1000)
-    await repo.corp_apply(delta=100)
+    await repo.corp_apply(CHAT, delta=100)
     await bank.take_loan(CHAT, USER, 100)
     await repo.upsert_loan(CHAT, USER, defaulted=True)
 
@@ -589,7 +691,7 @@ async def test_recover_from_deposit_pays_debt_from_principal(db):
     await bank.take_loan(CHAT, USER, 100)  # 50% of 600 credit limit covers 100
     await repo.upsert_loan(CHAT, USER, accrued_interest=20, defaulted=True)
 
-    corp_before = (await repo.get_corp()).balance
+    corp_before = (await repo.get_corp(CHAT)).balance
     loan = await repo.get_loan(CHAT, USER)
     recovered = await bank.recover_from_deposit(loan)
     assert recovered == 120  # full debt (100 principal + 20 interest)
@@ -602,7 +704,7 @@ async def test_recover_from_deposit_pays_debt_from_principal(db):
     dep = await repo.get_deposit(CHAT, USER)
     assert dep.principal == 400 - 120  # pulled out of the deposit body
 
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(CHAT)
     # Cash already sat in the till — no movement, only the interest slice booked.
     assert corp.balance == corp_before
     assert corp.total_interest_earned == 20
@@ -614,7 +716,7 @@ async def test_recover_from_deposit_noop_without_default(db):
 
     await _seed_player(1000)
     await bank.open_deposit(CHAT, USER, 1000)
-    await repo.corp_apply(delta=100)
+    await repo.corp_apply(CHAT, delta=100)
     await bank.take_loan(CHAT, USER, 100)  # not defaulted
 
     loan = await repo.get_loan(CHAT, USER)
@@ -691,7 +793,7 @@ async def test_roll_confiscation_deterministic(db):
 
     seized = await bank.roll_confiscation(dep, cfg(), rng=_Rng())
     assert seized > 0
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(CHAT)
     assert corp.total_penalties == seized
     # The 1000 principal already funded the till on open; confiscation only books
     # the seized slice as earnings without moving cash, so the balance is unchanged.

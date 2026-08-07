@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from db.engine import get_session_factory
 from db.models import (
-    Corporation,
+    ChatCorporation,
     Event,
     Loan,
     Player,
@@ -563,16 +563,16 @@ async def _cashout_in_session(
                     loan.accrued_interest -= interest_part
                     loan.principal -= principal_part
                     loan.roll_debt_principal = max(0, loan.roll_debt_principal - principal_part)
-                corp = await session.get(Corporation, 1)
+                corp = await session.get(ChatCorporation, table.chat_id)
                 if corp is None:
-                    session.add(Corporation(id=1))
+                    session.add(ChatCorporation(chat_id=table.chat_id))
                     await session.flush()
                 await session.execute(
-                    update(Corporation)
-                    .where(Corporation.id == 1)
+                    update(ChatCorporation)
+                    .where(ChatCorporation.chat_id == table.chat_id)
                     .values(
-                        balance=Corporation.balance + garnished,
-                        total_interest_earned=Corporation.total_interest_earned + interest_part,
+                        balance=ChatCorporation.balance + garnished,
+                        total_interest_earned=ChatCorporation.total_interest_earned + interest_part,
                     )
                 )
             credited = returned - garnished
@@ -813,20 +813,20 @@ async def save_hand(
                         seat.sitting_out = True
             rake = int(result.get("rake", 0)) if table.mode == "money" else 0
             if rake:
-                corp = await session.get(Corporation, 1)
+                assert table.chat_id is not None
+                corp = await session.get(ChatCorporation, table.chat_id)
                 if corp is None:
-                    session.add(Corporation(id=1))
+                    session.add(ChatCorporation(chat_id=table.chat_id))
                     await session.flush()
                 await session.execute(
-                    update(Corporation)
-                    .where(Corporation.id == 1)
+                    update(ChatCorporation)
+                    .where(ChatCorporation.chat_id == table.chat_id)
                     .values(
-                        balance=Corporation.balance + rake,
-                        total_tax=Corporation.total_tax + rake,
-                        total_poker_rake=Corporation.total_poker_rake + rake,
+                        balance=ChatCorporation.balance + rake,
+                        total_tax=ChatCorporation.total_tax + rake,
+                        total_poker_rake=ChatCorporation.total_poker_rake + rake,
                     )
                 )
-                assert table.chat_id is not None
                 session.add(
                     _event(
                         table.chat_id,

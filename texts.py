@@ -52,6 +52,19 @@ def dick_grew(delta: int) -> str:
     return f"вырос на {delta} см"
 
 
+def dick_funded_growth(result) -> str:
+    if result.clipped:
+        return (
+            f"мог вырасти на {result.nominal} см, но местная Корпорация уже сосёт "
+            f"пустую кассу: выдали {result.credited} (эмиссия {result.emitted}, касса "
+            f"{result.corporation_paid}), а {result.clipped} см засунули обратно в генератор"
+        )
+    return (
+        f"вырос на {result.credited} см (эмиссия {result.emitted}, "
+        f"Корпорация отстегнула {result.corporation_paid})"
+    )
+
+
 def dick_shrank(delta: int) -> str:
     return f"уменьшился на {abs(delta)} см"
 
@@ -1126,6 +1139,7 @@ BANK_NOT_YOURS = "Эта банковская панель не твоя. Отк
 
 BTN_BANK_DEPOSIT = "💰 Вклад"
 BTN_BANK_LOAN = "🏦 Кредит"
+BTN_BANK_SEKASKO = "🩲 СЕКАСКО"
 BTN_BANK_CORP = "🏢 Корпорация"
 BTN_BANK_REFRESH = "🔄 Обновить"
 BTN_BANK_CLOSE = "✖ Закрыть"
@@ -1172,6 +1186,10 @@ def bank_screen(s) -> str:
             else f"🔒 до {fmt_datetime(d.matures_at)} ({_dur(d.matures_at - _now_ts())})"
         )
         lines.append(f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} см) · {status}")
+        lines.append(
+            f"🩲 СЕКАСКО: <b>{d.insured}</b> см"
+            + (f" до {fmt_datetime(d.insurance_expires_at)}" if d.insured else " — голая жопа")
+        )
     else:
         lines.append("💰 Вклад: голяк. Деньги от тебя шарахаются, нищук.")
     if s.loan:
@@ -1192,6 +1210,8 @@ def bank_screen(s) -> str:
     else:
         lines.append("🏦 Долг: чисто. Пока никому не должен, везунчик.")
     lines.append(f"📈 Кредитный рейтинг: +{s.loans_repaid} / −{s.loans_defaulted}")
+    if s.next_credit_reward_at > _now_ts():
+        lines.append(f"↳ Следующий честный плюс не раньше {fmt_datetime(s.next_credit_reward_at)}")
     lines.append(f"🧾 Доступный кредит: <b>{s.loan_limit}</b>")
     return "\n".join(lines)
 
@@ -1214,6 +1234,7 @@ def bank_dep_screen(s) -> str:
         lines += [
             f"Тело: <b>{d.principal}</b>",
             f"Накапало: <b>{d.accrued}</b>",
+            f"СЕКАСКО защищает: <b>{d.insured}</b> см",
             status,
         ]
     else:
@@ -1252,14 +1273,21 @@ def bank_loan_screen(s) -> str:
 
 
 def corp_screen(corp) -> str:
-    bankrupt = corp.balance < 0
     head = "🏢 <b>Корпорация</b>"
-    if bankrupt:
-        mood = f"💀 БАНКРОТ. В кассе <b>{corp.balance}</b> — дыра, в которую провалилась вся ваша нищая орава."
+    if corp.status == "sanation":
+        mood = f"🚨 САНАЦИЯ до {fmt_datetime(corp.sanation_deadline)}. Касса обосралась и теперь считает ваши долги."
+    elif corp.status == "recovery":
+        mood = "🩼 ПОСЛЕ РАСПИЛА. Банк ещё ползёт на культях и копит живые деньги."
     else:
-        mood = f"💼 В кассе: <b>{corp.balance}</b>. Жиреет на ваших дуэлях и кредитах, а вы и рады спонсировать."
+        mood = f"💼 Касса пока не сдохла: <b>{corp.balance}</b> см."
     return (
         f"{head}\n\n{mood}\n\n"
+        f"• Вклады к возврату: {corp.deposits}\n"
+        f"• Неприкосновенный резерв: {corp.reserve_required}\n"
+        f"• Свободно для кредитов и раздач: {corp.spendable}\n"
+        f"• Резерв СЕКАСКО: {corp.insurance_reserve}\n"
+        f"• Напечатано через /dick: {corp.total_emission}\n"
+        f"• Списано при распилах: {corp.total_bailin}\n"
         f"• Налогов с дуэлей: {max(0, corp.total_tax - corp.total_poker_rake)}\n"
         f"• Слизано с покерных банков: {corp.total_poker_rake}\n"
         f"• Процентов с кредитов: {corp.total_interest_earned}\n"
@@ -1282,6 +1310,10 @@ BANK_ERR = {
     "corp_broke": "💢 В кассе Корпорации шаром покати. Раздавать нечего — иди наполняй её дуэлями, а потом приходи клянчить.",
     "loan_denied": "💢 Тебе только что дали от ворот поворот. Не долби в кассу как дятел — посиди в углу, остынь и приходи позже.",
     "bad_amount": "💢 Это не сумма, а каракули. Тыкни нормальное число, грамотей.",
+    "corp_frozen": "💢 Банк лежит мордой в асфальте. Во время санации новые фокусы с деньгами закрыты.",
+    "corp_sanation": "💢 Касса не тянет снятие. Запущена санация: семь дней должникам на спасение, потом вкладчикам устроят секаторный субботник.",
+    "insurance_limit": "💢 Столько СЕКАСКО не налезет. Страхуй только доступную часть до лимита, математический онанист.",
+    "insurance_cash": "💢 На страховую премию не хватает ликвидных сантиметров. Даже трусы в кредит тебе не дают.",
 }
 
 
@@ -1301,12 +1333,16 @@ def loan_taken(amount: int, due_at: int) -> str:
 
 def loan_repaid(amount: int, cleared: bool) -> str:
     if cleared:
-        return f"✅ Закрыл долг под ноль (−{amount}). Рейтинг подрос, коллекторы убрали биты обратно в багажник."
+        return f"✅ Закрыл долг под ноль (−{amount}). Рейтинг вырастет только если кредит был достаточно крупным, старым и не накручен твоими потными пальцами."
     return f"➖ Кинул <b>{amount}</b> в счёт долга. Остальное капает, не расслабляй булки."
 
 
 def dick_deposit_interest(amount: int) -> str:
     return f"💰 Вклад капнул +{amount} — за то, что сегодня не сдох и доковылял до /dick."
+
+
+def sekasko_bought(amount: int, premium: int) -> str:
+    return f"🩲 СЕКАСКО натянуто на <b>{amount}</b> см. Премия <b>{premium}</b> см списана отдельно — безопасность твоей мошонки бесплатной не бывает."
 
 
 def dick_garnished(amount: int) -> str:
@@ -1323,6 +1359,24 @@ def collector_reminder(debt: int, overdue_for: int) -> str:
         f"Слышь, должник. За тобой <b>{debt}</b>, и просрочка уже {_dur(overdue_for)}. "
         f"Долг мы заморозили, зато теперь тихонько режем твои /dick и победы. "
         f"Тащи бабки через /bank, пока мы добрые — а добрые мы недолго."
+    )
+
+
+def crisis_debtor_reminder(debt: int, deadline: int) -> str:
+    return (
+        f"🚨 Из-за таких финансовых импотентов, как ты, местная Корпорация дохнет. "
+        f"За тобой <b>{debt}</b> см. До {fmt_datetime(deadline)} не вернёшь — "
+        "чужие вклады пустят под секатор, а твоё имя останется в списке долбоёбов санации."
+    )
+
+
+def crisis_chat_summary(deadline: int, deposits: int, debtor_lines: list[str]) -> str:
+    debtors = "\n".join(debtor_lines) if debtor_lines else "• Должники попрятались или уже пусты."
+    return (
+        "🚨 <b>КОРПОРАЦИЯ ОБОСРАЛАСЬ: САНАЦИЯ</b>\n\n"
+        f"Вклады под угрозой: <b>{deposits}</b> см. До распила: {fmt_datetime(deadline)}.\n"
+        "Не вернут долги — незастрахованные вклады отрежут без наркоза.\n\n"
+        f"<b>Финансовые красавцы:</b>\n{debtors}"
     )
 
 
@@ -1353,6 +1407,10 @@ ADMIN_GSET_INSURANCE_TITLE = (
     "Страховка смягчает отрицательный /dick игрокам с активами ниже порога."
 )
 BTN_GSET_INSURANCE = "🛡 Настройки ПИСЯГО"
+ADMIN_GSET_CORP_TITLE = (
+    "🏢 <b>Локальные Корпорации и СЕКАСКО</b>\nНормы едины, кассы у чатов отдельные."
+)
+BTN_GSET_CORP = "🏢 Корпорации и СЕКАСКО"
 
 
 def res_chat_unbanned(chat_id: int) -> str:

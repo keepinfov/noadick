@@ -105,6 +105,7 @@ async def cmd_dick(message: Message) -> None:
         debt_due_at = 0
         debt_defaulted = False
         pisyago: bank.PisyagoResult | None = None
+        payout: bank.DickPayout | None = None
         if delta < 0:
             pisyago = await bank.apply_pisyago_on_dict(chat_id, user_id, -delta)
             debt_added = pisyago.debt
@@ -113,7 +114,8 @@ async def cmd_dick(message: Message) -> None:
                     chat_id, user_id, debt_added
                 )
         else:
-            player["size"] += delta
+            payout = await bank.fund_positive_dick(chat_id, user_id, delta)
+            player["size"] += payout.credited
         player["last"] = int(now.timestamp())
         player["name"] = user.first_name
         storage[uid_str] = player
@@ -147,7 +149,7 @@ async def cmd_dick(message: Message) -> None:
         elif debt_added:
             change_text = texts.dick_debt_assessed(debt_added, debt_due_at, debt_defaulted)
         elif delta >= 0:
-            change_text = texts.dick_grew(delta)
+            change_text = texts.dick_funded_growth(payout) if payout else texts.dick_grew(delta)
         else:
             change_text = texts.dick_shrank(delta)
 
@@ -180,6 +182,9 @@ async def cmd_dick(message: Message) -> None:
                 "rolled": rolled,
                 "pisyago_covered": pisyago.covered if pisyago else 0,
                 "roll_debt": debt_added,
+                "emitted": payout.emitted if payout else 0,
+                "corporation_paid": payout.corporation_paid if payout else 0,
+                "clipped": payout.clipped if payout else 0,
             },
             created_at=ts,
         )

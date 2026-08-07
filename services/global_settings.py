@@ -58,6 +58,17 @@ EDITABLE_BANK: list[tuple[str, str, int, int, int, int]] = [
     ("reminder_cooldown_sec", "Напоминание: КД (сек)", 1800, 3600, 0, 604800),
 ]
 
+EDITABLE_CORP: list[tuple[str, str, int, int, int, int]] = [
+    ("dick_emission_cap", "/dick: эмиссия плюса (см)", 1, 3, 0, 1000),
+    ("corp_liquidity_reserve_pct", "Корпорация: резерв вкладов (%)", 5, 25, 0, 100),
+    ("corp_sanation_days", "Корпорация: санация (дней)", 1, 7, 1, 90),
+    ("sekasko_max_coverage", "СЕКАСКО: лимит (см)", 5, 40, 0, 100000),
+    ("sekasko_premium_pct", "СЕКАСКО: премия (%)", 1, 5, 0, 100),
+    ("credit_reward_min_age_days", "Рейтинг: мин. возраст кредита", 1, 3, 0, 365),
+    ("credit_reward_cooldown_days", "Рейтинг: КД зачёта (дней)", 1, 14, 0, 365),
+    ("credit_reward_min_limit_pct", "Рейтинг: мин. доля лимита (%)", 5, 25, 0, 100),
+]
+
 # PISYAGO gets a compact sub-panel of its own: adding its controls to the bank
 # panel would cross Telegram's 100-button limit.
 EDITABLE_INSURANCE: list[tuple[str, str, int, int, int, int]] = [
@@ -66,7 +77,7 @@ EDITABLE_INSURANCE: list[tuple[str, str, int, int, int, int]] = [
     ("dick_insurance_period_days", "ПИСЯГО: период (дней)", 1, 7, 1, 365),
 ]
 
-_ALL_EDITABLE = EDITABLE + EDITABLE_BANK + EDITABLE_INSURANCE
+_ALL_EDITABLE = EDITABLE + EDITABLE_BANK + EDITABLE_INSURANCE + EDITABLE_CORP
 BOUNDS: dict[str, tuple[int, int]] = {k: (mn, mx) for k, _, _, _, mn, mx in _ALL_EDITABLE}
 LABELS: dict[str, str] = {k: lbl for k, lbl, _, _, _, _ in _ALL_EDITABLE}
 
@@ -105,6 +116,14 @@ DEFAULTS: dict[str, int] = {
     "loan_duel_garnish_pct": 50,
     "collector_interval_sec": 3600,
     "reminder_cooldown_sec": 21600,
+    "dick_emission_cap": 3,
+    "corp_liquidity_reserve_pct": 25,
+    "corp_sanation_days": 7,
+    "sekasko_max_coverage": 40,
+    "sekasko_premium_pct": 5,
+    "credit_reward_min_age_days": 3,
+    "credit_reward_cooldown_days": 14,
+    "credit_reward_min_limit_pct": 25,
 }
 
 
@@ -144,6 +163,14 @@ class GlobalConfig:
     loan_duel_garnish_pct: int
     collector_interval_sec: int
     reminder_cooldown_sec: int
+    dick_emission_cap: int
+    corp_liquidity_reserve_pct: int
+    corp_sanation_days: int
+    sekasko_max_coverage: int
+    sekasko_premium_pct: int
+    credit_reward_min_age_days: int
+    credit_reward_cooldown_days: int
+    credit_reward_min_limit_pct: int
 
     @property
     def size_weight(self) -> float:

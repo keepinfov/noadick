@@ -45,7 +45,9 @@ def _bank_callback(action: str, uid: int, value: str = "_") -> str:
 
 
 async def _main_kb(uid: int) -> InlineKeyboardMarkup:
-    corp = await bank.corp_state()
+    from repositories import bank as bank_repo
+
+    corp = await bank_repo.get_rules_corp()
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
@@ -103,6 +105,22 @@ def _dep_kb(uid: int) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="Снять сумму", callback_data=_bank_callback("dwdc", uid)),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="СЕКАСКО +5", callback_data=_bank_callback("sins", uid, "5")
+                ),
+                InlineKeyboardButton(
+                    text="СЕКАСКО +10", callback_data=_bank_callback("sins", uid, "10")
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="СЕКАСКО максимум", callback_data=_bank_callback("sins", uid, "all")
+                ),
+                InlineKeyboardButton(
+                    text="СЕКАСКО сумма", callback_data=_bank_callback("sinsc", uid)
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -203,7 +221,7 @@ async def cmd_corp(message: Message) -> None:
     if message.chat.type not in {"group", "supergroup"}:
         await message.answer(texts.BANK_GROUP_ONLY)
         return
-    corp = await bank.corp_state()
+    corp = await bank.corp_state(message.chat.id)
     await message.answer(texts.corp_screen(corp), reply_markup=_corp_kb(user.id), parse_mode="HTML")
 
 
@@ -345,7 +363,7 @@ async def cb_corp(callback: CallbackQuery, callback_data: BankCallback | None = 
     if not _owns(callback, uid):
         await callback.answer(texts.BANK_NOT_YOURS, show_alert=True)
         return
-    corp = await bank.corp_state()
+    corp = await bank.corp_state(callback.message.chat.id)
     await _edit(callback, texts.corp_screen(corp), _corp_kb(uid))
     await callback.answer()
 
@@ -450,6 +468,40 @@ async def cb_dep_withdraw(
     await _run_op(callback, uid, texts.dep_withdrawn(res.amount, res.extra), "dep")
 
 
+@router.callback_query(BankCallback.filter(F.action == "sins"))
+@router.callback_query(F.data.startswith("bk:sins:"))
+async def cb_sekasko(callback: CallbackQuery, callback_data: BankCallback | None = None) -> None:
+    try:
+        uid, arg = _callback_args(callback, callback_data)
+    except (IndexError, ValueError):
+        await _invalid_callback(callback)
+        return
+    if not _owns(callback, uid):
+        await callback.answer(texts.BANK_NOT_YOURS, show_alert=True)
+        return
+    chat_id = callback.message.chat.id
+    summary = await bank.get_summary(chat_id, uid)
+    if summary.deposit is None:
+        await callback.answer(texts.BANK_ERR["no_deposit"], show_alert=True)
+        return
+    from services.global_settings import get_config_sync
+
+    available = max(
+        0,
+        min(summary.deposit.principal, get_config_sync().sekasko_max_coverage)
+        - summary.deposit.insured,
+    )
+    amount = available if arg == "all" else int(arg) if arg.isdigit() else 0
+    try:
+        res = await bank.buy_sekasko(chat_id, uid, amount)
+    except bank.BankError as e:
+        await callback.answer(
+            texts.BANK_ERR.get(e.code, texts.BANK_ERR["bad_amount"]), show_alert=True
+        )
+        return
+    await _run_op(callback, uid, texts.sekasko_bought(res.amount, res.extra), "dep")
+
+
 @router.callback_query(BankCallback.filter(F.action == "ltake"))
 @router.callback_query(F.data.startswith("bk:ltake:"))
 async def cb_loan_take(callback: CallbackQuery, callback_data: BankCallback | None = None) -> None:
@@ -526,6 +578,7 @@ _ACTION_LABEL = {
     "dwdc": "снятие",
     "ltakec": "кредит",
     "lrepayc": "погашение",
+    "sinsc": "СЕКАСКО",
 }
 
 
@@ -589,6 +642,16 @@ async def cb_lrepayc(
     await _prompt_amount(callback, state, "lrepayc", callback_data)
 
 
+@router.callback_query(BankCallback.filter(F.action == "sinsc"))
+@router.callback_query(F.data.startswith("bk:sinsc:"))
+async def cb_sinsc(
+    callback: CallbackQuery,
+    state: FSMContext,
+    callback_data: BankCallback | None = None,
+) -> None:
+    await _prompt_amount(callback, state, "sinsc", callback_data)
+
+
 @router.message(BankStates.amount)
 async def msg_amount(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -625,6 +688,9 @@ async def msg_amount(message: Message, state: FSMContext) -> None:
             res = await bank.repay_loan(chat_id, uid, amount)
             cleared = (await bank.get_summary(chat_id, uid)).loan is None
             notice = texts.loan_repaid(res.amount, cleared)
+        elif action == "sinsc":
+            res = await bank.buy_sekasko(chat_id, uid, amount)
+            notice = texts.sekasko_bought(res.amount, res.extra)
         else:
             return
     except bank.BankError as e:

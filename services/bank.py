@@ -1,4 +1,4 @@
-"""Economy core: deposits, loans and the global Corporation account.
+"""Economy core: deposits, loans and chat-local Corporation accounts.
 
 Money rules (kept deliberately simple but internally consistent):
 
@@ -14,8 +14,8 @@ Money rules (kept deliberately simple but internally consistent):
   the debt by calendar time and, when repaid or garnished, becomes Corporation
   income. Past the due date the loan defaults and is recovered by garnishing
   /dick gains and duel winnings.
-* The Corporation is the single global house account. It may go negative — that is
-  the bankruptcy state, shown (with crude flavour) in /corp.
+* Every group has an isolated Corporation. A 25% liquidity reserve limits risk;
+  failed withdrawals trigger a seven-day sanction and uninsured deposit bail-in.
 
 The pure helpers (rates, limits, penalties) take a config snapshot and are unit
 tested; the async ops below wrap them with repository IO. Callers that already hold
@@ -153,6 +153,8 @@ class DepositView:
     matures_at: int
     matured: bool
     active_days: int
+    insured: int = 0
+    insurance_expires_at: int = 0
 
 
 @dataclass
@@ -195,6 +197,64 @@ class BankSummary:
     loans_defaulted: int
     loan_limit: int
     pisyago: PisyagoView
+    next_credit_reward_at: int = 0
+
+
+@dataclass(frozen=True)
+class DickPayout:
+    nominal: int
+    credited: int
+    emitted: int
+    corporation_paid: int
+    clipped: int
+
+
+@dataclass(frozen=True)
+class CorpView:
+    chat_id: int
+    balance: int
+    insurance_reserve: int
+    status: str
+    sanation_deadline: int
+    bankruptcy_count: int
+    deposits: int
+    reserve_required: int
+    spendable: int
+    total_tax: int
+    total_interest_earned: int
+    total_interest_paid: int
+    total_penalties: int
+    total_poker_rake: int
+    total_emission: int
+    total_bailin: int
+
+
+async def insured_principal(
+    chat_id: int, user_id: int, principal: int, now: int | None = None
+) -> tuple[int, int]:
+    now = _now() if now is None else now
+    policies = await repo.active_insurance(chat_id, user_id, now)
+    amount = min(max(0, principal), sum(max(0, p.amount) for p in policies))
+    expiry = max((p.expires_at for p in policies), default=0)
+    return amount, expiry
+
+
+def required_reserve(liability: int, cfg: GlobalConfig) -> int:
+    return max(0, liability) * cfg.corp_liquidity_reserve_pct // 100
+
+
+async def _start_sanation(chat_id: int) -> None:
+    corp = await repo.get_corp(chat_id)
+    if corp.status != "healthy":
+        return
+    now = _now()
+    cfg = get_config_sync()
+    await repo.set_corp_fields(
+        chat_id,
+        status="sanation",
+        sanation_started_at=now,
+        sanation_deadline=now + cfg.corp_sanation_days * DAY,
+    )
 
 
 async def get_summary(chat_id: int, user_id: int) -> BankSummary:
@@ -207,12 +267,15 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
     dep_row = await repo.get_deposit(chat_id, user_id)
     dep_view = None
     if dep_row is not None and dep_row.principal > 0:
+        insured, insurance_expires_at = await insured_principal(chat_id, user_id, dep_row.principal)
         dep_view = DepositView(
             principal=dep_row.principal,
             accrued=dep_row.accrued,
             matures_at=dep_row.matures_at,
             matured=_now() >= dep_row.matures_at,
             active_days=dep_row.active_days_count,
+            insured=insured,
+            insurance_expires_at=insurance_expires_at,
         )
 
     poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
@@ -249,9 +312,11 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
 
     # The Corporation lends its own cash, so what you can actually borrow is the
     # smaller of your credit limit and the money currently in the till.
-    corp = await repo.get_corp()
+    corp = await repo.get_corp(chat_id)
     credit_limit = max_loan(size, repaid, defaulted_n, cfg)
-    available = min(credit_limit, max(0, corp.balance))
+    liability = await repo.deposit_liability(chat_id)
+    spendable = max(0, corp.balance - required_reserve(liability, cfg))
+    available = min(credit_limit, spendable) if corp.status == "healthy" else 0
 
     return BankSummary(
         size=size,
@@ -261,6 +326,8 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
         loans_defaulted=defaulted_n,
         loan_limit=available,
         pisyago=pisyago,
+        next_credit_reward_at=(player.last_credit_reward_at if player else 0)
+        + cfg.credit_reward_cooldown_days * DAY,
     )
 
 
@@ -358,9 +425,43 @@ async def apply_pisyago_on_dict(chat_id: int, user_id: int, loss: int) -> Pisyag
 # --------------------------------------------------------------------------- #
 
 
+async def buy_sekasko(chat_id: int, user_id: int, amount: int) -> OpResult:
+    cfg = get_config_sync()
+    async with players_repo.get_chat_lock(chat_id):
+        corp = await repo.get_corp(chat_id)
+        if corp.status != "healthy":
+            raise BankError("corp_frozen")
+        dep = await repo.get_deposit(chat_id, user_id)
+        if dep is None or dep.principal <= 0:
+            raise BankError("no_deposit")
+        covered, _ = await insured_principal(chat_id, user_id, dep.principal)
+        available = min(dep.principal, cfg.sekasko_max_coverage) - covered
+        if amount < 1 or amount > available:
+            raise BankError("insurance_limit")
+        premium = max(1, (amount * cfg.sekasko_premium_pct + 99) // 100)
+        player = await players_repo.get_player(chat_id, user_id)
+        if player is None or player.size < premium:
+            raise BankError("insurance_cash")
+        await players_repo.set_player_fields(chat_id, user_id, size=player.size - premium)
+        expires_at = _now() + cfg.dep_term_days * DAY
+        await repo.add_insurance(chat_id, user_id, amount, premium, expires_at)
+        await repo.corp_apply(chat_id, delta=0, insurance_delta=premium)
+        await E.log_event(
+            chat_id,
+            user_id,
+            E.DEPOSIT_INSURANCE,
+            delta=-premium,
+            size_after=player.size - premium,
+            meta={"insured": amount, "premium": premium, "expires_at": expires_at},
+        )
+        return OpResult(amount=amount, extra=premium)
+
+
 async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
     cfg = get_config_sync()
     async with players_repo.get_chat_lock(chat_id):
+        if (await repo.get_corp(chat_id)).status != "healthy":
+            raise BankError("corp_frozen")
         player = await players_repo.get_player(chat_id, user_id)
         if player is None or player.size <= 0:
             raise BankError("no_size")
@@ -391,8 +492,8 @@ async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
 
         await players_repo.set_player_fields(chat_id, user_id, size=player.size - amount)
         # The principal joins the Corporation's till — that is the cash it lends out.
-        async with repo.corp_lock():
-            await repo.corp_apply(delta=amount)
+        async with repo.corp_lock(chat_id):
+            await repo.corp_apply(chat_id, delta=amount)
         await E.log_event(
             chat_id, user_id, E.DEPOSIT_OPEN, delta=-amount, size_after=player.size - amount
         )
@@ -404,6 +505,9 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
     and the penalty+forfeited interest withheld by the Corporation."""
     cfg = get_config_sync()
     async with players_repo.get_chat_lock(chat_id):
+        corp = await repo.get_corp(chat_id)
+        if corp.status != "healthy":
+            raise BankError("corp_frozen")
         dep = await repo.get_deposit(chat_id, user_id)
         if dep is None or dep.principal <= 0:
             raise BankError("no_deposit")
@@ -418,26 +522,34 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
             # Principal leaves the till back to the depositor (the accrued part was
             # already paid out of the till when it was earned). A drained till can
             # go negative here — that is a bank run, i.e. the bankruptcy event.
-            async with repo.corp_lock():
-                await repo.corp_apply(delta=-w)
+            cash_delta = -credited
         else:
             penalty = (w * cfg.dep_early_penalty_pct + 99) // 100  # ceil
             credited = max(0, w - penalty)
             # Principal (minus the retained penalty) leaves the till; the forfeited,
             # pre-paid interest is reclaimed by the house. Both penalty and forfeited
             # interest count as house earnings.
-            async with repo.corp_lock():
-                await repo.corp_apply(
-                    delta=accrued_share - (w - penalty),
-                    penalties=penalty + accrued_share,
-                )
-            if penalty or accrued_share:
-                await E.log_event(
-                    chat_id,
-                    user_id,
-                    E.DEPOSIT_PENALTY,
-                    meta={"penalty": penalty, "forfeit_interest": accrued_share},
-                )
+            cash_delta = -credited
+
+        liability = await repo.deposit_liability(chat_id)
+        remaining_liability = max(0, liability - w - accrued_share)
+        projected_cash = corp.balance + cash_delta
+        if projected_cash < required_reserve(remaining_liability, cfg):
+            await _start_sanation(chat_id)
+            raise BankError("corp_sanation")
+        async with repo.corp_lock(chat_id):
+            await repo.corp_apply(
+                chat_id,
+                delta=cash_delta,
+                penalties=0 if matured else penalty + accrued_share,
+            )
+        if not matured and (penalty or accrued_share):
+            await E.log_event(
+                chat_id,
+                user_id,
+                E.DEPOSIT_PENALTY,
+                meta={"penalty": penalty, "forfeit_interest": accrued_share},
+            )
 
         rem_principal = dep.principal - w
         rem_accrued = dep.accrued - accrued_share
@@ -450,6 +562,7 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
 
         if rem_principal <= 0:
             await repo.delete_deposit(chat_id, user_id)
+            await repo.delete_insurance_for_deposit(chat_id, user_id)
         else:
             await repo.upsert_deposit(
                 chat_id,
@@ -480,13 +593,14 @@ async def accrue_deposit_on_play(chat_id: int, user_id: int, today: str) -> int:
     cap_total = dep.principal * cfg.dep_yield_cap_pct // 100
     if dep.accrued >= cap_total:
         return 0
-    # The Corporation pays this out of its own till. A broke house pays nothing —
-    # and we don't burn the active day, so the depositor can still earn once the
-    # till recovers. Interest is capped to whatever cash the Corporation has. The
-    # corp lock keeps the cap check and the payout consistent across chats.
-    async with repo.corp_lock():
-        corp = await repo.get_corp()
-        available = max(0, corp.balance)
+    # Interest is a new liability, not a cash payout. It can only consume free
+    # corporate capital; the actual cash leaves when the deposit is withdrawn.
+    async with repo.corp_lock(chat_id):
+        corp = await repo.get_corp(chat_id)
+        if corp.status != "healthy":
+            return 0
+        liability = await repo.deposit_liability(chat_id)
+        available = max(0, corp.balance - liability)
         if interest > 0 and available <= 0:
             return 0
         owed = interest
@@ -502,7 +616,7 @@ async def accrue_deposit_on_play(chat_id: int, user_id: int, today: str) -> int:
             interest_remainder_ppm=remainder,
         )
         if interest:
-            await repo.corp_apply(delta=-interest, interest_paid=interest)
+            await repo.corp_apply(chat_id, delta=0, interest_paid=interest)
     if interest:
         await E.log_event(chat_id, user_id, E.DEPOSIT_INTEREST, meta={"interest": interest})
     return interest
@@ -534,9 +648,12 @@ async def take_loan(chat_id: int, user_id: int, amount: int) -> OpResult:
         # The money comes out of the Corporation's till — it can't lend what it
         # doesn't have, and it never lends itself into the red. Hold the corp lock
         # across the read+debit so two chats can't both drain the same cash.
-        async with repo.corp_lock():
-            corp = await repo.get_corp()
-            available = max(0, corp.balance)
+        async with repo.corp_lock(chat_id):
+            corp = await repo.get_corp(chat_id)
+            if corp.status != "healthy":
+                raise BankError("corp_frozen")
+            liability = await repo.deposit_liability(chat_id)
+            available = max(0, corp.balance - required_reserve(liability, cfg))
             if available < 1:
                 raise BankError("corp_broke")
             amount = max(1, min(amount, credit_limit, available))
@@ -553,10 +670,16 @@ async def take_loan(chat_id: int, user_id: int, amount: int) -> OpResult:
                 last_accrual_at=now,
                 last_reminded_at=0,
                 defaulted=False,
+                original_cash_principal=amount,
+                credit_limit_at_open=credit_limit,
+                rating_eligible=(
+                    amount >= cfg.loan_min
+                    and amount * 100 >= credit_limit * cfg.credit_reward_min_limit_pct
+                ),
             )
             new_size = size + amount
             await players_repo.set_player_fields(chat_id, user_id, size=new_size)
-            await repo.corp_apply(delta=-amount)  # cash leaves the vault into the borrower
+            await repo.corp_apply(chat_id, delta=-amount)
         await E.log_event(
             chat_id,
             user_id,
@@ -619,9 +742,49 @@ async def charge_dick_debt_on_dict(chat_id: int, user_id: int, amount: int) -> t
     return due_at, defaulted
 
 
+async def fund_positive_dick(chat_id: int, user_id: int, nominal: int) -> DickPayout:
+    """Pay a positive roll from explicit emission plus spendable local cash."""
+    if nominal < 0:
+        raise ValueError("nominal must be non-negative")
+    cfg = get_config_sync()
+    emitted = min(nominal, max(0, cfg.dick_emission_cap))
+    house_due = nominal - emitted
+    async with repo.corp_lock(chat_id):
+        corp = await repo.get_corp(chat_id)
+        liability = await repo.deposit_liability(chat_id)
+        spendable = max(0, corp.balance - required_reserve(liability, cfg))
+        corporation_paid = min(house_due, spendable) if corp.status == "healthy" else 0
+        await repo.corp_apply(
+            chat_id,
+            delta=-corporation_paid,
+            emission=emitted,
+        )
+    credited = emitted + corporation_paid
+    result = DickPayout(
+        nominal=nominal,
+        credited=credited,
+        emitted=emitted,
+        corporation_paid=corporation_paid,
+        clipped=nominal - credited,
+    )
+    await E.log_event(
+        chat_id,
+        user_id,
+        E.CORP_EMISSION,
+        meta={
+            "nominal": nominal,
+            "emitted": emitted,
+            "corporation_paid": corporation_paid,
+            "clipped": result.clipped,
+        },
+    )
+    return result
+
+
 async def repay_loan(chat_id: int, user_id: int, amount: int | None) -> OpResult:
     """Repay ``amount`` from liquid size (None = as much as possible). Interest
     portion becomes Corporation income; principal portion is burned."""
+    cfg = get_config_sync()
     async with players_repo.get_chat_lock(chat_id):
         loan = await repo.get_loan(chat_id, user_id)
         if loan is None or (loan.principal <= 0 and loan.accrued_interest <= 0):
@@ -640,16 +803,30 @@ async def repay_loan(chat_id: int, user_id: int, amount: int | None) -> OpResult
         await players_repo.set_player_fields(chat_id, user_id, size=new_size)
         # The full payment returns to the Corporation: principal refills the till,
         # interest is its profit.
-        await repo.corp_apply(delta=pay, interest_earned=interest_part)
+        await repo.corp_apply(chat_id, delta=pay, interest_earned=interest_part)
 
         remaining = debt - pay
         if remaining <= 0:
             await repo.delete_loan(chat_id, user_id)
             # Paying a fee generated by a bad /dick roll is basic hygiene, not
             # evidence that the Corporation should expand this clown's credit.
-            if loan.principal > loan.roll_debt_principal:
+            now = _now()
+            reward_ready = (
+                bool(loan.rating_eligible)
+                and loan.original_cash_principal > 0
+                and now - loan.opened_at >= cfg.credit_reward_min_age_days * DAY
+                and now <= loan.due_at
+                and now - (player.last_credit_reward_at if player else 0)
+                >= cfg.credit_reward_cooldown_days * DAY
+            )
+            if reward_ready:
                 repaid = (player.loans_repaid if player else 0) + 1
-                await players_repo.set_player_fields(chat_id, user_id, loans_repaid=repaid)
+                await players_repo.set_player_fields(
+                    chat_id,
+                    user_id,
+                    loans_repaid=repaid,
+                    last_credit_reward_at=now,
+                )
         else:
             remaining_roll_debt = max(0, loan.roll_debt_principal - principal_part)
             await repo.upsert_loan(
@@ -707,8 +884,8 @@ async def _garnish(chat_id: int, user_id: int, player_dict: dict, base: int, pct
     principal_part = take - interest_part
     player_dict["size"] = max(0, player_dict.get("size", 0) - take)
     # Recovered money flows back to the Corporation (principal + interest profit).
-    async with repo.corp_lock():
-        await repo.corp_apply(delta=take, interest_earned=interest_part)
+    async with repo.corp_lock(chat_id):
+        await repo.corp_apply(chat_id, delta=take, interest_earned=interest_part)
     remaining = debt - take
     if remaining <= 0:
         # Forced recovery on a defaulted loan clears the debt but does NOT count as
@@ -803,8 +980,8 @@ async def recover_from_deposit(loan) -> int:
             interest_remainder_ppm=(dep.interest_remainder_ppm * rem_dep // dep.principal),
         )
     # Cash already in the till; only book the interest slice as earnings.
-    async with repo.corp_lock():
-        await repo.corp_apply(delta=0, interest_earned=interest_part)
+    async with repo.corp_lock(loan.chat_id):
+        await repo.corp_apply(loan.chat_id, delta=0, interest_earned=interest_part)
 
     remaining = debt - take
     if remaining <= 0:
@@ -849,8 +1026,10 @@ async def roll_confiscation(
         return 0
     if not fired:
         return 0
+    insured, _ = await insured_principal(dep.chat_id, dep.user_id, dep.principal)
+    exposed = max(0, dep.principal - insured)
     frac = r.uniform(0, cfg.dep_confisc_max_pct / 100)
-    seized = int(dep.principal * frac)
+    seized = int(exposed * frac)
     if seized <= 0:
         if today:
             await repo.upsert_deposit(dep.chat_id, dep.user_id, last_confisc_day=today)
@@ -865,7 +1044,7 @@ async def roll_confiscation(
     )
     # The seized cash is already sitting in the till (deposits fund it). We only
     # shrink the depositor's claim and book it as house earnings — no cash moves.
-    await repo.corp_apply(delta=0, penalties=seized)
+    await repo.corp_apply(dep.chat_id, delta=0, penalties=seized)
     await E.log_event(
         dep.chat_id, dep.user_id, E.CONFISCATION, delta=-seized, meta={"seized": seized}
     )
@@ -877,15 +1056,36 @@ async def roll_confiscation(
 # --------------------------------------------------------------------------- #
 
 
-async def corp_state():
-    return await repo.get_corp()
+async def corp_state(chat_id: int) -> CorpView:
+    cfg = get_config_sync()
+    corp = await repo.get_corp(chat_id)
+    deposits = await repo.deposit_liability(chat_id)
+    reserve = required_reserve(deposits, cfg)
+    return CorpView(
+        chat_id=chat_id,
+        balance=corp.balance,
+        insurance_reserve=corp.insurance_reserve,
+        status=corp.status,
+        sanation_deadline=corp.sanation_deadline,
+        bankruptcy_count=corp.bankruptcy_count,
+        deposits=deposits,
+        reserve_required=reserve,
+        spendable=max(0, corp.balance - reserve) if corp.status == "healthy" else 0,
+        total_tax=corp.total_tax,
+        total_interest_earned=corp.total_interest_earned,
+        total_interest_paid=corp.total_interest_paid,
+        total_penalties=corp.total_penalties,
+        total_poker_rake=corp.total_poker_rake,
+        total_emission=corp.total_emission,
+        total_bailin=corp.total_bailin,
+    )
 
 
 async def credit_corp_tax(chat_id: int, user_id: int, amount: int) -> None:
     """Funnel the duel house-cut into the Corporation (previously it vanished)."""
     if amount <= 0:
         return
-    await repo.corp_apply(delta=amount, tax=amount)
+    await repo.corp_apply(chat_id, delta=amount, tax=amount)
     await E.log_event(chat_id, user_id, E.CORP_TAX, meta={"tax": amount})
 
 
@@ -941,5 +1141,115 @@ async def run_collector_pass(bot) -> None:
     for dep in await repo.all_deposits():
         async with players_repo.get_chat_lock(dep.chat_id):
             fresh = await repo.get_deposit(dep.chat_id, dep.user_id)
-            if fresh is not None and fresh.principal > 0:
+            corp = await repo.get_corp(dep.chat_id)
+            if fresh is not None and fresh.principal > 0 and corp.status == "healthy":
                 await roll_confiscation(fresh, cfg, today)
+
+    await _run_corporation_crises(bot, now)
+
+
+async def _insured_total(chat_id: int, deposits: list) -> int:
+    total = 0
+    for dep in deposits:
+        covered, _ = await insured_principal(chat_id, dep.user_id, dep.principal)
+        total += covered
+    return total
+
+
+async def _bail_in(chat_id: int, now: int) -> int:
+    """Wipe accrued and uninsured deposit claims without minting cash."""
+    wiped = 0
+    deposits = await repo.chat_deposits(chat_id)
+    for dep in deposits:
+        covered, _ = await insured_principal(chat_id, dep.user_id, dep.principal, now)
+        wiped += dep.accrued + max(0, dep.principal - covered)
+        if covered <= 0:
+            await repo.delete_deposit(chat_id, dep.user_id)
+            await repo.delete_insurance_for_deposit(chat_id, dep.user_id)
+        else:
+            await repo.upsert_deposit(
+                chat_id,
+                dep.user_id,
+                principal=covered,
+                accrued=0,
+                interest_remainder_ppm=0,
+            )
+    corp = await repo.get_corp(chat_id)
+    preserved = await repo.deposit_liability(chat_id)
+    status = "healthy" if preserved <= corp.balance + corp.insurance_reserve else "recovery"
+    await repo.set_corp_fields(
+        chat_id,
+        status=status,
+        sanation_started_at=0,
+        sanation_deadline=0,
+        bankruptcy_count=corp.bankruptcy_count + 1,
+        total_bailin=corp.total_bailin + wiped,
+    )
+    await E.log_event(chat_id, 0, E.CORP_BAILIN, meta={"wiped": wiped, "preserved": preserved})
+    return wiped
+
+
+async def _run_corporation_crises(bot, now: int) -> None:
+    """Advance local seven-day sanctions and send one crude daily pressure wave."""
+    import html
+
+    import texts
+    from repositories import threads as threads_repo
+
+    for corp in await repo.all_corps():
+        if corp.status == "healthy":
+            continue
+        deposits = await repo.chat_deposits(corp.chat_id)
+        liability = sum(d.principal + d.accrued for d in deposits)
+        insured = await _insured_total(corp.chat_id, deposits)
+        uninsured = max(0, liability - insured)
+        can_cover = corp.balance >= uninsured and corp.balance + corp.insurance_reserve >= liability
+        if can_cover:
+            await repo.set_corp_fields(
+                corp.chat_id, status="healthy", sanation_started_at=0, sanation_deadline=0
+            )
+            continue
+        if corp.status == "sanation" and now >= corp.sanation_deadline:
+            await _bail_in(corp.chat_id, now)
+            continue
+        if now - corp.last_crisis_notice_at < DAY:
+            continue
+        loans = await repo.chat_loans(corp.chat_id)
+        lines = []
+        for loan in loans:
+            debt = loan.principal + loan.accrued_interest
+            if debt <= 0:
+                continue
+            player = await players_repo.get_player(corp.chat_id, loan.user_id)
+            name = html.escape(player.name if player and player.name else str(loan.user_id))
+            lines.append(f'• <a href="tg://user?id={loan.user_id}">{name}</a>: {debt} см')
+            try:
+                await bot.send_message(
+                    loan.user_id,
+                    texts.crisis_debtor_reminder(debt, corp.sanation_deadline),
+                    parse_mode="HTML",
+                )
+            except TelegramAPIError:
+                pass
+        text = texts.crisis_chat_summary(corp.sanation_deadline, liability, lines)
+        try:
+            thread_id, _reason = await threads_repo.resolve_thread(corp.chat_id)
+            if corp.crisis_message_id:
+                await bot.edit_message_text(
+                    text,
+                    chat_id=corp.chat_id,
+                    message_id=corp.crisis_message_id,
+                    parse_mode="HTML",
+                )
+            else:
+                message = await bot.send_message(
+                    corp.chat_id, text, parse_mode="HTML", message_thread_id=thread_id
+                )
+                await repo.set_corp_fields(
+                    corp.chat_id,
+                    crisis_message_id=message.message_id,
+                    crisis_thread_id=thread_id or 0,
+                )
+        except TelegramAPIError:
+            pass
+        await repo.set_corp_fields(corp.chat_id, last_crisis_notice_at=now)

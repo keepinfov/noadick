@@ -72,6 +72,7 @@ class Player(Base):
     # Credit history feeding the loan-limit multiplier (see services/bank.py).
     loans_repaid: Mapped[int] = mapped_column(Integer, default=0)
     loans_defaulted: Mapped[int] = mapped_column(Integer, default=0)
+    last_credit_reward_at: Mapped[int] = mapped_column(Integer, default=0)
     # PISYAGO is a renewable safety net for poor players. ``insurance_used``
     # counts covered centimetres in the current fixed window; reset_at starts
     # with the first covered loss, so idle players do not burn their allowance.
@@ -104,6 +105,34 @@ class Corporation(Base):
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
+class ChatCorporation(Base):
+    """Per-chat operating bank. The legacy ``corporation`` row is retained only
+    for published rule URLs and an auditable migration source."""
+
+    __tablename__ = "chat_corporations"
+
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), primary_key=True
+    )
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+    insurance_reserve: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String, default="healthy")
+    sanation_started_at: Mapped[int] = mapped_column(Integer, default=0)
+    sanation_deadline: Mapped[int] = mapped_column(Integer, default=0)
+    bankruptcy_count: Mapped[int] = mapped_column(Integer, default=0)
+    crisis_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    crisis_thread_id: Mapped[int] = mapped_column(Integer, default=0)
+    last_crisis_notice_at: Mapped[int] = mapped_column(Integer, default=0)
+    total_tax: Mapped[int] = mapped_column(Integer, default=0)
+    total_interest_earned: Mapped[int] = mapped_column(Integer, default=0)
+    total_interest_paid: Mapped[int] = mapped_column(Integer, default=0)
+    total_penalties: Mapped[int] = mapped_column(Integer, default=0)
+    total_poker_rake: Mapped[int] = mapped_column(Integer, default=0)
+    total_emission: Mapped[int] = mapped_column(Integer, default=0)
+    total_bailin: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
 class Deposit(Base):
     """One active deposit per (chat, user). Opening moves size out of the
     player (freezing it: hidden from /top, unusable in duels, no /dick growth);
@@ -133,6 +162,21 @@ class Deposit(Base):
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
+class DepositInsurance(Base):
+    """One SЕКАСКО coverage tranche. Tranches expire independently so buying a
+    centimetre later cannot renew older coverage for free."""
+
+    __tablename__ = "deposit_insurance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    premium: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
 class Loan(Base):
     """One active loan per (chat, user). Principal is credited to liquid size
     immediately; interest accrues by calendar time. Past due_at the loan is in
@@ -153,6 +197,9 @@ class Loan(Base):
     last_accrual_at: Mapped[int] = mapped_column(Integer, default=_now)
     last_reminded_at: Mapped[int] = mapped_column(Integer, default=0)
     defaulted: Mapped[bool] = mapped_column(Boolean, default=False)
+    original_cash_principal: Mapped[int] = mapped_column(Integer, default=0)
+    credit_limit_at_open: Mapped[int] = mapped_column(Integer, default=0)
+    rating_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
@@ -289,6 +336,14 @@ class GlobalSettings(Base):
     loan_duel_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
     collector_interval_sec: Mapped[int] = mapped_column(Integer, default=3600)
     reminder_cooldown_sec: Mapped[int] = mapped_column(Integer, default=21600)
+    dick_emission_cap: Mapped[int] = mapped_column(Integer, default=3)
+    corp_liquidity_reserve_pct: Mapped[int] = mapped_column(Integer, default=25)
+    corp_sanation_days: Mapped[int] = mapped_column(Integer, default=7)
+    sekasko_max_coverage: Mapped[int] = mapped_column(Integer, default=40)
+    sekasko_premium_pct: Mapped[int] = mapped_column(Integer, default=5)
+    credit_reward_min_age_days: Mapped[int] = mapped_column(Integer, default=3)
+    credit_reward_cooldown_days: Mapped[int] = mapped_column(Integer, default=14)
+    credit_reward_min_limit_pct: Mapped[int] = mapped_column(Integer, default=25)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 

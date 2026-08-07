@@ -50,7 +50,7 @@ async def test_reform_cuts_all_assets_once_and_keeps_corp_unchanged(db):
         accrued=20,
         interest_remainder_ppm=500_000,
     )
-    await bank_repo.corp_apply(delta=123)
+    await bank_repo.corp_apply(chat_id, delta=123)
 
     preview = await economy_reform.preview(chat_id)
     assert preview.already_applied is False
@@ -70,7 +70,7 @@ async def test_reform_cuts_all_assets_once_and_keeps_corp_unchanged(db):
     assert player.size == 82
     assert (dep.principal, dep.accrued) == (82, 16)
     assert dep.interest_remainder_ppm == 410_000
-    assert (await bank_repo.get_corp()).balance == 123
+    assert (await bank_repo.get_corp(chat_id)).balance == 123
 
     events = await events_repo.get_events(chat_id, user_id, types=[events_repo.HEALTH_REFORM])
     assert len(events) == 1
