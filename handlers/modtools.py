@@ -91,7 +91,11 @@ async def cmd_gameconfig(message: Message, command: CommandObject) -> None:
         eff = await get_effective(chat_id)
         await message.answer(
             texts.gameconfig_current(
-                eff.tz, eff.diseases_enabled, eff.duel_stake_default, eff.duel_timeout
+                eff.tz,
+                eff.diseases_enabled,
+                eff.duel_stake_default,
+                eff.duel_timeout,
+                eff.poker_enabled,
             ),
             parse_mode="HTML",
         )

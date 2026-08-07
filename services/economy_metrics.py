@@ -4,10 +4,10 @@ import random
 import time
 from dataclasses import dataclass
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import case, distinct, func, select
 
 from db.engine import get_session_factory
-from db.models import Corporation, Deposit, Event, Loan, Player
+from db.models import Corporation, Deposit, Event, Loan, Player, PokerSeat, PokerTable
 from models.disease import DISEASE_CHANCE, DISEASES
 from services.game import WEIGHTED_RANGES
 
@@ -16,10 +16,19 @@ from services.game import WEIGHTED_RANGES
 class EconomySnapshot:
     players: int
     liquid: int
+    poker_escrow: int
     deposits: int
     deposit_interest: int
     loans: int
     defaults: int
+    roll_debts: int
+    deposits_due_24h: int
+    deposits_due_7d: int
+    deposits_later: int
+    loans_overdue: int
+    loans_due_24h: int
+    loans_due_7d: int
+    loans_later: int
     corporation: int
     net_delta_7d: int
     net_delta_30d: int
@@ -47,6 +56,8 @@ class GrowthSimulation:
     median: int
     p90: int
     zero_percent: float
+    mean_roll_debt: float
+    debt_p90: int
 
 
 async def snapshot(now: int | None = None) -> EconomySnapshot:
@@ -58,6 +69,17 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
                 select(func.count(Player.user_id), func.coalesce(func.sum(Player.size), 0))
             )
         ).one()
+        poker_escrow = (
+            await session.execute(
+                select(func.coalesce(func.sum(PokerSeat.stack + PokerSeat.committed), 0))
+                .join(PokerTable, PokerTable.table_id == PokerSeat.table_id)
+                .where(
+                    PokerSeat.status == "active",
+                    PokerTable.mode == "money",
+                    PokerTable.status != "closed",
+                )
+            )
+        ).scalar_one()
         deposit_count, deposit_principal, deposit_interest = (
             await session.execute(
                 select(
@@ -67,12 +89,106 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
                 )
             )
         ).one()
+        dep_due_24h, dep_due_7d, dep_later = (
+            await session.execute(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Deposit.matures_at <= now + 86400,
+                                    Deposit.principal + Deposit.accrued,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Deposit.matures_at.between(now + 86401, now + 7 * 86400),
+                                    Deposit.principal + Deposit.accrued,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Deposit.matures_at > now + 7 * 86400,
+                                    Deposit.principal + Deposit.accrued,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                )
+            )
+        ).one()
         loan_count, loan_total, defaults = (
             await session.execute(
                 select(
                     func.count(Loan.user_id),
                     func.coalesce(func.sum(Loan.principal + Loan.accrued_interest), 0),
                     func.coalesce(func.sum(Loan.defaulted), 0),
+                )
+            )
+        ).one()
+        roll_debts, loan_overdue, loan_due_24h, loan_due_7d, loan_later = (
+            await session.execute(
+                select(
+                    func.coalesce(func.sum(Loan.roll_debt_principal), 0),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (Loan.due_at <= now, Loan.principal + Loan.accrued_interest),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Loan.due_at.between(now + 1, now + 86400),
+                                    Loan.principal + Loan.accrued_interest,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Loan.due_at.between(now + 86401, now + 7 * 86400),
+                                    Loan.principal + Loan.accrued_interest,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Loan.due_at > now + 7 * 86400,
+                                    Loan.principal + Loan.accrued_interest,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
                 )
             )
         ).one()
@@ -94,10 +210,19 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
         return EconomySnapshot(
             players=int(players),
             liquid=int(liquid),
+            poker_escrow=int(poker_escrow),
             deposits=int(deposit_principal),
             deposit_interest=int(deposit_interest),
             loans=int(loan_total),
             defaults=int(defaults),
+            roll_debts=int(roll_debts),
+            deposits_due_24h=int(dep_due_24h),
+            deposits_due_7d=int(dep_due_7d),
+            deposits_later=int(dep_later),
+            loans_overdue=int(loan_overdue),
+            loans_due_24h=int(loan_due_24h),
+            loans_due_7d=int(loan_due_7d),
+            loans_later=int(loan_later),
             corporation=int(corporation.balance if corporation else 0),
             net_delta_7d=delta_7d,
             net_delta_30d=delta_30d,
@@ -119,11 +244,13 @@ def simulate_growth(
     rng = random.Random(seed)
     ranges, weights = zip(*WEIGHTED_RANGES, strict=True)
     outcomes: list[int] = []
+    debts: list[int] = []
 
     for _ in range(trials):
         size = initial_size
         disease = None
         disease_days_left = 0
+        roll_debt = 0
         for _day in range(days):
             if disease_days_left <= 0:
                 disease = None
@@ -131,14 +258,19 @@ def simulate_growth(
             delta = rng.randint(selected[0], selected[1])
             if disease is not None:
                 delta = max(0, int(delta * disease.growth_mod))
-            size = max(0, size + delta)
+            if delta < 0:
+                roll_debt += -delta
+            else:
+                size += delta
             disease_days_left -= 1
             if diseases_enabled and rng.random() < DISEASE_CHANCE:
                 disease = rng.choice(DISEASES)
                 disease_days_left = disease.days
         outcomes.append(size)
+        debts.append(roll_debt)
 
     outcomes.sort()
+    debts.sort()
     return GrowthSimulation(
         days=days,
         initial_size=initial_size,
@@ -148,4 +280,6 @@ def simulate_growth(
         median=outcomes[int((trials - 1) * 0.50)],
         p90=outcomes[int((trials - 1) * 0.90)],
         zero_percent=sum(value == 0 for value in outcomes) / trials * 100,
+        mean_roll_debt=sum(debts) / trials,
+        debt_p90=debts[int((trials - 1) * 0.90)],
     )

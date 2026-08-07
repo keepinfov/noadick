@@ -9,7 +9,7 @@ from aiogram.types import BotCommand, ErrorEvent
 
 from config import get_settings
 from db.engine import dispose_engine, init_db
-from handlers import admin, bank, dick, duel, help, modtools, ping, profile, settings, top
+from handlers import admin, bank, dick, duel, help, modtools, ping, poker, profile, settings, top
 from middlewares.registry import RegistryMiddleware
 from observability import LoggingContextMiddleware, configure_logging
 from services import backups, global_settings
@@ -52,8 +52,10 @@ async def main() -> None:
 
     dp.message.outer_middleware(LoggingContextMiddleware())
     dp.callback_query.outer_middleware(LoggingContextMiddleware())
+    dp.inline_query.outer_middleware(LoggingContextMiddleware())
     dp.message.outer_middleware(RegistryMiddleware())
     dp.callback_query.outer_middleware(RegistryMiddleware())
+    dp.inline_query.outer_middleware(RegistryMiddleware())
 
     @dp.errors()
     async def on_error(event: ErrorEvent) -> bool:
@@ -66,6 +68,7 @@ async def main() -> None:
         modtools.router,
         dick.router,
         duel.router,
+        poker.router,
         bank.router,
         profile.router,
         top.router,
@@ -77,6 +80,7 @@ async def main() -> None:
         [
             BotCommand(command="dick", description="Испытать удачу"),
             BotCommand(command="duel", description="Вызвать на дуэль (ответом)"),
+            BotCommand(command="poker", description="Создать или открыть покерный стол"),
             BotCommand(command="me", description="Твой профиль и статистика"),
             BotCommand(command="top", description="Топ-10 по размеру"),
             BotCommand(command="bank", description="Банк: вклады и кредиты"),
@@ -89,6 +93,7 @@ async def main() -> None:
 
     background_tasks = [
         asyncio.create_task(_collector_loop(bot), name="bank-collector"),
+        asyncio.create_task(poker.watchdog_loop(bot), name="poker-watchdog"),
         asyncio.create_task(
             backups.backup_loop(
                 settings_config.db_path,

@@ -56,6 +56,18 @@ def dick_shrank(delta: int) -> str:
     return f"уменьшился на {abs(delta)} см"
 
 
+def dick_debt_assessed(amount: int, due_at: int, defaulted: bool) -> str:
+    if defaulted:
+        return (
+            f"снова обмяк на {amount} см, но резать уже нечего — Корпорация немедленно "
+            f"накинула их на твою просроченную долговую шею"
+        )
+    return (
+        f"обмяк на {amount} см; отрезать пока не стали, зато записали долг до "
+        f"{fmt_datetime(due_at)} — наслаждайся арендованным достоинством"
+    )
+
+
 def dick_result(mention: str, change_text: str, size: int, rank: int, remaining: str) -> str:
     return (
         f"{mention}, твой {DICK} {change_text}.\n"
@@ -112,6 +124,10 @@ def profile_stolen(stolen: int, lost: int) -> str:
 
 def profile_infections(n: int) -> str:
     return f"Заражений: {n}"
+
+
+def profile_poker_stack(stack: int) -> str:
+    return f"За покерным столом: {stack} см — временно не на руках, а под чужими жадными глазами"
 
 
 def profile_current_disease(name: str) -> str:
@@ -193,6 +209,7 @@ HELP = (
     "/help — вывести этот текст\n"
     "/dick — испытать удачу\n"
     "/duel [ставка] — вызвать на дуэль (ответом на сообщение)\n"
+    "/poker — ПИСЮН-HOLDEM на сантиметры\n"
     "/me — твой профиль и статистика\n"
     "/top — топ-10 по размеру\n"
     "/bank — вклады, кредиты и текущий баланс\n"
@@ -272,17 +289,22 @@ GAMECONFIG_USAGE = (
     "Ключи:\n"
     "• <code>tz</code> — часовой пояс (например <code>Europe/Moscow</code>)\n"
     "• <code>diseases</code> — болезни <code>on</code>/<code>off</code>\n"
+    "• <code>poker</code> — покер <code>on</code>/<code>off</code>\n"
     "• <code>duel_stake</code> — ставка дуэли по умолчанию (1–1000)\n"
     "• <code>duel_timeout</code> — таймаут дуэли в секундах (10–600)"
 )
 
 
-def gameconfig_current(tz: str, diseases: bool, stake: int, timeout: int) -> str:
+def gameconfig_current(
+    tz: str, diseases: bool, stake: int, timeout: int, poker: bool = True
+) -> str:
     on_off = "on" if diseases else "off"
+    poker_on_off = "on" if poker else "off"
     return (
         "⚙️ Текущие настройки чата:\n"
         f"• tz: <code>{html.escape(tz)}</code>\n"
         f"• diseases: <code>{on_off}</code>\n"
+        f"• poker: <code>{poker_on_off}</code>\n"
         f"• duel_stake: <code>{stake}</code>\n"
         f"• duel_timeout: <code>{timeout}</code>"
     )
@@ -293,7 +315,7 @@ def gameconfig_set_ok(key: str, value: str) -> str:
 
 
 GAMECONFIG_ERRORS = {
-    "unknown_key": "Неизвестный ключ. Доступны: tz, diseases, duel_stake, duel_timeout.",
+    "unknown_key": "Неизвестный ключ. Доступны: tz, diseases, poker, duel_stake, duel_timeout.",
     "bad_tz": "Неизвестный часовой пояс. Пример: Europe/Moscow.",
     "bad_bool": "Ожидается on или off.",
     "bad_int": "Ожидается целое число.",
@@ -610,14 +632,23 @@ SETTINGS_BAD_TZ = "Неизвестный часовой пояс. Пример:
 SETTINGS_NOT_ALLOWED = "Только администраторы чата могут менять настройки."
 
 
-def settings_screen(tz: str, diseases: bool, stake: int, timeout: int, banking: bool = True) -> str:
+def settings_screen(
+    tz: str,
+    diseases: bool,
+    stake: int,
+    timeout: int,
+    banking: bool = True,
+    poker: bool = True,
+) -> str:
     on_off = "вкл" if diseases else "выкл"
     bank_off = "вкл" if banking else "выкл"
+    poker_off = "вкл" if poker else "выкл"
     return (
         f"{SETTINGS_TITLE}\n\n"
         f"• Часовой пояс: <code>{html.escape(tz)}</code>\n"
         f"• Болезни: {on_off}\n"
         f"• Банк: {bank_off}\n"
+        f"• Покер: {poker_off}\n"
         f"• Ставка дуэли: {stake}\n"
         f"• Таймаут дуэли: {timeout} сек"
     )
@@ -631,6 +662,10 @@ def settings_btn_banking(enabled: bool) -> str:
     return f"🏦 Банк: {'✅' if enabled else '❌'}"
 
 
+def settings_btn_poker(enabled: bool) -> str:
+    return f"🃏 Покер: {'✅' if enabled else '❌'}"
+
+
 def settings_label_stake(value: int) -> str:
     return f"Ставка дуэли: {value}"
 
@@ -641,6 +676,72 @@ def settings_label_timeout(value: int) -> str:
 
 def settings_btn_tz(tz: str) -> str:
     return f"🕒 Часовой пояс: {tz}"
+
+
+# --------------------------------------------------------------------- poker ---
+
+POKER_DISABLED = "🃏 Покер отключён администраторами этого чата."
+POKER_DM_REQUIRED = "Открой личку с ботом — карты в общий чат я тебе не вывалю."
+POKER_TURN_NOTICE = (
+    "🍆 Твой ход. Шевели единственной рабочей извилиной: таймер не обязан ждать, "
+    "пока из жопы родится стратегия."
+)
+POKER_REQUEST_SENT = (
+    "Заявка отправлена. Хозяин изучает твою финансовую и моральную несостоятельность."
+)
+POKER_REQUEST_APPROVED = "✅ Тебя пустили за стол. Постарайся не расплескать стек."
+POKER_REQUEST_DENIED = "🚫 Хозяин решил, что за этим столом органов и так достаточно."
+POKER_CREATED = "✅ Стол создан. Пульт и карты будут жить в этом чате."
+POKER_CUSTOM_CONFIG = (
+    "Пришли пять целых чисел через пробел:\n"
+    "<code>бай-ин малый_блайнд большой_блайнд места таймер</code>\n"
+    "Например: <code>60 1 2 5 60</code>."
+)
+POKER_CUSTOM_RAISE = "Введи итоговую ставку целым числом в указанном диапазоне."
+POKER_TOPUP_PROMPT = "Сколько сантиметров добавить в стек? Пришли целое число."
+POKER_CLOSED = "🏁 Стол закрыт. Остатки возвращены владельцам."
+
+POKER_ERRORS = {
+    "already_seated": "Твоя жопа уже заняла стул за другим столом. Размножаться запретили — позорься последовательно.",
+    "not_a_player": "Сначала сыграй /dick в исходном чате. Без замера ты здесь не игрок, а шум из коридора.",
+    "locally_banned": LOCAL_BANNED,
+    "not_enough": "Не хватает свободных сантиметров. Карманы пустые, понты полные — классический клиент Корпорации.",
+    "table_closed": "Этот стол уже закрыт.",
+    "table_missing": "Стол не найден или уже растворился в истории.",
+    "table_full": "Все стулья заняты. Стоя унижаться правила пока не разрешают.",
+    "table_banned": "Хозяин этого стола внёс тебя в маленькую чёрную книжечку.",
+    "invite_only": "Сюда входят только по персональному или одноразовому приглашению.",
+    "invite_invalid": "Приглашение истекло, уже использовано или предназначалось не тебе.",
+    "host_only": "Убери липкие пальцы: эту кнопку трогает хозяин, а не случайный хуй с прохода.",
+    "request_expired": "Заявка уже истекла. Пусть игрок попросится снова.",
+    "request_missing": "Заявка больше не существует.",
+    "not_seated": "Ты не сидишь за этим столом. Отойди от кнопок, цифровой бомж.",
+    "hand_active": "Дождись конца текущей раздачи.",
+    "empty_stack": "Сначала докупи стек — с пустыми руками тут только шутят.",
+    "not_everyone_ready": "Нужно хотя бы двое готовых. Пока здесь один азартный орган и хор трусливых мошонок.",
+    "hand_missing": "Активная раздача уже закончилась.",
+    "stale_action": "Ты нажал протухшую кнопку. Стол уже уехал вперёд, а ты снова догоняешь собственную мысль.",
+    "bad_amount": "Напиши положительное целое число. Даже твой калькулятор сейчас смотрит на тебя с презрением.",
+    "bad_seats": "За столом может быть от 2 до 6 мест.",
+    "bad_blinds": "Блайнды должны быть положительными, большой не меньше малого.",
+    "buyin_too_small": "Бай-ин должен быть не меньше десяти больших блайндов.",
+    "amount_too_large": "Число настолько раздуто, что даже база данных не поверила твоему комплексу величия.",
+    "bad_timeout": "Таймер хода может быть от 30 до 180 секунд.",
+    "bad_config": "Настройки стола не прошли проверку.",
+    "cannot_kick_host": "Чтобы выгнать хозяина, хозяину придётся закрыть весь стол.",
+    "not_your_turn": "Не твой ход. Сядь на руки, раз они бегут быстрее головы.",
+    "cannot_check": "Нахаляву отсидеться не выйдет: плати колл или отползай в пас, финансовый слизень.",
+    "nothing_to_call": "Коллировать нечего.",
+    "cannot_raise": "Сейчас рейз недоступен.",
+    "not_enough_stack": "В стеке нет столько сантиметров.",
+    "raise_too_small": "Это не рейз, а жалкое подёргивание. Поднимай нормально или вытряхивай весь стек.",
+    "amount_required": "Укажи сумму рейза.",
+    "unknown_action": "Неизвестное действие.",
+}
+
+
+def poker_error(code: str) -> str:
+    return POKER_ERRORS.get(code, "Покерный механизм недовольно хрустнул. Попробуй ещё раз.")
 
 
 BTN_UNBAN_USER = "✅ Разбан юзера"
@@ -887,8 +988,14 @@ def admin_economy(report) -> str:
         "📈 <b>Экономика</b>\n\n"
         f"Игроков: {report.players}\n"
         f"Ликвидно у игроков: {report.liquid} см\n"
+        f"За покерными столами: {report.poker_escrow} см\n"
         f"Вклады: {report.deposits} + {report.deposit_interest} см процентов\n"
-        f"Долги игроков: {report.loans} см · просрочек: {report.defaults}\n"
+        f"Созреют: ≤24ч {report.deposits_due_24h} · 1–7д {report.deposits_due_7d} · "
+        f"позже {report.deposits_later} см\n"
+        f"Долги игроков: {report.loans} см · из них за /dick {report.roll_debts} · "
+        f"просрочек: {report.defaults}\n"
+        f"К взысканию: уже {report.loans_overdue} · ≤24ч {report.loans_due_24h} · "
+        f"1–7д {report.loans_due_7d} · позже {report.loans_later} см\n"
         f"Касса Корпорации: {report.corporation} см\n"
         f"Покрытие вкладов: {coverage:.0f}% ({coverage_flag})\n\n"
         f"Чистое изменение 7 дней: {report.net_delta_7d:+d} см "
@@ -1004,16 +1111,29 @@ def bank_screen(s) -> str:
     lines = [BANK_TITLE, "", f"💪 На руках (ликвидно): <b>{s.size}</b>"]
     if s.deposit:
         d = s.deposit
-        status = "🔓 созрел" if d.matured else f"🔒 до созревания {_dur(d.matures_at - _now_ts())}"
+        status = (
+            "🔓 созрел"
+            if d.matured
+            else f"🔒 до {fmt_datetime(d.matures_at)} ({_dur(d.matures_at - _now_ts())})"
+        )
         lines.append(f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} см) · {status}")
     else:
         lines.append("💰 Вклад: голяк. Деньги от тебя шарахаются, нищук.")
     if s.loan:
         ln = s.loan
-        flag = "❗️ПРОСРОЧКА" if ln.defaulted else f"до сдачи {_dur(ln.due_at - _now_ts())}"
+        flag = (
+            "❗️ПРОСРОЧКА"
+            if ln.defaulted
+            else f"до {fmt_datetime(ln.due_at)} ({_dur(ln.due_at - _now_ts())})"
+        )
         lines.append(
             f"🏦 Долг: <b>{ln.debt}</b> ({ln.principal} тело + {ln.interest} проценты) · {flag}"
         )
+        if ln.roll_debt:
+            lines.append(
+                f"↳ Из тела <b>{ln.roll_debt}</b> см — счёт за провальные замеры /dick. "
+                "Корпорация даже твой минус превратила в подписку."
+            )
     else:
         lines.append("🏦 Долг: чисто. Пока никому не должен, везунчик.")
     lines.append(f"📈 Кредитный рейтинг: +{s.loans_repaid} / −{s.loans_defaulted}")
@@ -1034,7 +1154,7 @@ def bank_dep_screen(s) -> str:
         status = (
             "🔓 созрел — снимай без штрафа"
             if d.matured
-            else f"🔒 ещё {_dur(d.matures_at - _now_ts())} под замком"
+            else f"🔒 до {fmt_datetime(d.matures_at)} — ещё {_dur(d.matures_at - _now_ts())} под замком"
         )
         lines += [
             f"Тело: <b>{d.principal}</b>",
@@ -1059,9 +1179,11 @@ def bank_loan_screen(s) -> str:
         flag = (
             "❗️ПРОСРОЧКА — Корпорация уже точит ножи"
             if ln.defaulted
-            else f"вернуть за {_dur(ln.due_at - _now_ts())}"
+            else f"вернуть до {fmt_datetime(ln.due_at)} — через {_dur(ln.due_at - _now_ts())}"
         )
         lines += [f"Долг: <b>{ln.debt}</b> ({ln.principal} тело + {ln.interest} проценты)", flag]
+        if ln.roll_debt:
+            lines.append(f"За обмякшие броски /dick: <b>{ln.roll_debt}</b> см")
     else:
         lines.append("Долгов нет. Пока не влез, терпила.")
     lines += [
@@ -1083,7 +1205,8 @@ def corp_screen(corp) -> str:
         mood = f"💼 В кассе: <b>{corp.balance}</b>. Жиреет на ваших дуэлях и кредитах, а вы и рады спонсировать."
     return (
         f"{head}\n\n{mood}\n\n"
-        f"• Налогов с дуэлей: {corp.total_tax}\n"
+        f"• Налогов с дуэлей: {max(0, corp.total_tax - corp.total_poker_rake)}\n"
+        f"• Слизано с покерных банков: {corp.total_poker_rake}\n"
         f"• Процентов с кредитов: {corp.total_interest_earned}\n"
         f"• Выплачено по вкладам: {corp.total_interest_paid}\n"
         f"• Штрафов и конфискаций: {corp.total_penalties}"
@@ -1155,7 +1278,8 @@ def profile_bank(s) -> str | None:
         parts.append(f"вклад {s.deposit.principal}(+{s.deposit.accrued})")
     if s.loan:
         flag = "❗просрочка" if s.loan.defaulted else "в срок"
-        parts.append(f"долг {s.loan.debt} ({flag})")
+        roll = f", /dick: {s.loan.roll_debt}" if s.loan.roll_debt else ""
+        parts.append(f"долг {s.loan.debt} ({flag}{roll})")
     if not parts and s.loans_repaid == 0 and s.loans_defaulted == 0:
         return None
     rating = f"рейтинг +{s.loans_repaid}/−{s.loans_defaulted}"

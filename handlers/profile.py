@@ -8,6 +8,7 @@ import texts
 from handlers import cooldowns
 from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
+from repositories import poker as poker_repo
 from services import bank
 from services import stats as S
 from services.global_settings import get_config_sync
@@ -133,6 +134,10 @@ async def cmd_me(message: Message, bot: Bot) -> None:
     bank_line = texts.profile_bank(await bank.get_summary(chat_id, user_id))
     if bank_line:
         lines.append(bank_line)
+
+    poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
+    if poker_stack:
+        lines.append(texts.profile_poker_stack(poker_stack))
 
     if profile.current_disease:
         d = DISEASE_BY_ID.get(profile.current_disease)

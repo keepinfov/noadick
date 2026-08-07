@@ -15,6 +15,7 @@ from aiogram.types import (
     Chat,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineQuery,
     Message,
     User,
 )
@@ -36,6 +37,8 @@ def _extract(event: Any) -> tuple[Chat | None, User | None]:
     if isinstance(event, CallbackQuery):
         chat = event.message.chat if event.message else None
         return chat, event.from_user
+    if isinstance(event, InlineQuery):
+        return None, event.from_user
     return None, None
 
 

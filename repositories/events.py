@@ -26,6 +26,13 @@ LOAN_GARNISH = "loan_garnish"
 LOAN_DEFAULT = "loan_default"
 CORP_TAX = "corp_tax"
 HEALTH_REFORM = "health_reform"
+# Poker escrow and settlement events.
+POKER_BUYIN = "poker_buyin"
+POKER_TOPUP = "poker_topup"
+POKER_CASHOUT = "poker_cashout"
+POKER_RESULT = "poker_result"
+POKER_RAKE = "poker_rake"
+DICK_DEBT = "dick_debt"
 
 
 async def log_event(

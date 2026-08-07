@@ -165,6 +165,53 @@ async def test_open_deposit_no_size(db):
     assert e.value.code == "no_size"
 
 
+async def test_negative_dick_charge_becomes_timed_loan_without_cutting_size(db):
+    from repositories import bank as repo
+    from repositories import events as events_repo
+    from repositories import players as players_repo
+    from services import bank
+
+    await _seed_player(50)
+    due_at, defaulted = await bank.charge_dick_debt_on_dict(CHAT, USER, 7)
+
+    player = await players_repo.get_player(CHAT, USER)
+    loan = await repo.get_loan(CHAT, USER)
+    assert player.size == 50
+    assert (loan.principal, loan.roll_debt_principal) == (7, 7)
+    assert loan.due_at == due_at
+    assert defaulted is False
+    events = await events_repo.get_events(CHAT, USER, types=[events_repo.DICK_DEBT])
+    assert events[0].meta["amount"] == 7
+
+
+async def test_negative_dick_charge_joins_existing_credit_and_keeps_its_due_date(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(50)
+    await repo.corp_apply(delta=100)
+    await bank.take_loan(CHAT, USER, 10)
+    original = await repo.get_loan(CHAT, USER)
+
+    due_at, _ = await bank.charge_dick_debt_on_dict(CHAT, USER, 6)
+    combined = await repo.get_loan(CHAT, USER)
+    assert combined.principal == 16
+    assert combined.roll_debt_principal == 6
+    assert due_at == original.due_at
+
+
+async def test_repaying_only_measurement_debt_does_not_farm_credit_rating(db):
+    from repositories import players as players_repo
+    from services import bank
+
+    await _seed_player(50)
+    await bank.charge_dick_debt_on_dict(CHAT, USER, 5)
+    await bank.repay_loan(CHAT, USER, None)
+    player = await players_repo.get_player(CHAT, USER)
+    assert player.size == 45
+    assert player.loans_repaid == 0
+
+
 async def test_withdraw_early_penalty(db):
     from repositories import bank as repo
     from services import bank

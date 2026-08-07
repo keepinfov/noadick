@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineQuery, Message
 
 _context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "log_context", default=None
@@ -57,6 +57,8 @@ class LoggingContextMiddleware(BaseMiddleware):
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id
             chat_id = event.message.chat.id if event.message else None
+        elif isinstance(event, InlineQuery):
+            user_id = event.from_user.id
         update = data.get("event_update")
         token = _context.set(
             {
