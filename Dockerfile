@@ -29,6 +29,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     STORAGE_PATH=/app/storage \
     BACKUP_DIR=/app/data/backups \
     HEARTBEAT_PATH=/tmp/noadick/heartbeat \
+    MPLCONFIGDIR=/tmp/noadick/matplotlib \
     TZ=Europe/Moscow \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

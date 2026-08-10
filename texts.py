@@ -253,6 +253,7 @@ HELP = (
     "/duel [ставка] — вызвать на дуэль (ответом на сообщение)\n"
     "/poker — ПИСЮН-HOLDEM на сантиметры\n"
     "/me — твой профиль и статистика\n"
+    "/stats — подробная статистика, графики и CSV в личке\n"
     "/top — топ-10 по размеру\n"
     "/bank — вклады, кредиты и текущий баланс\n"
     "/corp — состояние Корпорации\n"
@@ -681,10 +682,15 @@ def settings_screen(
     timeout: int,
     banking: bool = True,
     poker: bool = True,
+    digest: bool = False,
+    digest_weekday: int = 0,
+    digest_hour: int = 10,
 ) -> str:
     on_off = "вкл" if diseases else "выкл"
     bank_off = "вкл" if banking else "выкл"
     poker_off = "вкл" if poker else "выкл"
+    digest_off = "вкл" if digest else "выкл"
+    weekdays = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
     return (
         f"{SETTINGS_TITLE}\n\n"
         f"• Часовой пояс: <code>{html.escape(tz)}</code>\n"
@@ -692,7 +698,8 @@ def settings_screen(
         f"• Банк: {bank_off}\n"
         f"• Покер: {poker_off}\n"
         f"• Ставка дуэли: {stake}\n"
-        f"• Таймаут дуэли: {timeout} сек"
+        f"• Таймаут дуэли: {timeout} сек\n"
+        f"• Недельный дайджест: {digest_off}, {weekdays[digest_weekday]} {digest_hour:02d}:00"
     )
 
 
@@ -718,6 +725,10 @@ def settings_label_timeout(value: int) -> str:
 
 def settings_btn_tz(tz: str) -> str:
     return f"🕒 Часовой пояс: {tz}"
+
+
+def settings_btn_digest(enabled: bool) -> str:
+    return f"📊 Недельный дайджест: {'✅' if enabled else '❌'}"
 
 
 # --------------------------------------------------------------------- poker ---

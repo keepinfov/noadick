@@ -255,6 +255,7 @@ async def act(
         if hand.version != version:
             raise repo.PokerRepoError("stale_action")
         state = dict(hand.state)
+        street_before = str(state["street"])
         engine.apply_action(state, user_id, action, amount)
         if timed_out:
             name = state["players"][str(user_id)]["name"]
@@ -273,6 +274,10 @@ async def act(
             expected_version=version,
             timed_out_uid=user_id if timed_out else None,
             garnish_pct=get_config_sync().loan_duel_garnish_pct,
+            action=action,
+            actor_id=user_id,
+            action_amount=amount,
+            action_street=street_before,
         )
         if not timed_out:
             await repo.reset_timeout_counter(table_id, user_id)

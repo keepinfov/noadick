@@ -269,3 +269,14 @@ async def test_ready_players_complete_persisted_hand_and_stale_action_is_rejecte
     finished = await poker_repo.get_latest_hand(table.table_id)
     assert finished is not None and finished.status == "finished"
     assert (await poker_repo.get_table(table.table_id)).status == "between"
+
+    from repositories import events
+
+    action_events = await events.get_events(chat, 1, types=[events.POKER_ACTION])
+    action_events += await events.get_events(chat, 2, types=[events.POKER_ACTION])
+    result_events = await events.get_events(chat, 1, types=[events.POKER_RESULT])
+    result_events += await events.get_events(chat, 2, types=[events.POKER_RESULT])
+    assert action_events
+    assert all((event.meta or {}).get("street") for event in action_events)
+    assert len(result_events) == 2
+    assert all("net" in (event.meta or {}) for event in result_events)

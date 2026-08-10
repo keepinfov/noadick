@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from callbacks import BankCallback, DuelCallback, SettingsCallback
+from callbacks import BankCallback, DuelCallback, SettingsCallback, StatsCallback
 from config import AppSettings
 from scripts.healthcheck import main as healthcheck
 from services.backups import create_backup
@@ -85,6 +85,14 @@ def test_callback_payloads_are_typed_and_fit_telegram_limit() -> None:
         BankCallback(action="lrepayc", user_id=9_223_372_036_854_775_807).pack(),
         SettingsCallback(action="timezone", chat_id=-9_223_372_036_854_775_807).pack(),
         DuelCallback(token="a" * 32).pack(),
+        StatsCallback(
+            action="show",
+            scope="u",
+            section="overview",
+            period="30",
+            chat_id=-9_223_372_036_854_775_807,
+            user_id=9_223_372_036_854_775_807,
+        ).pack(),
     ]
 
     assert all(len(payload.encode()) <= 64 for payload in payloads)

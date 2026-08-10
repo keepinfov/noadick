@@ -28,6 +28,12 @@ async def _global_link(bot: Bot) -> str | None:
     return f"https://t.me/{_bot_username}?start=me"
 
 
+async def _stats_link(bot: Bot, chat_id: int, user_id: int) -> str | None:
+    if await _global_link(bot) is None or not _bot_username:
+        return None
+    return f"https://t.me/{_bot_username}?start=stats_u_{chat_id}_{user_id}"
+
+
 def _mention(user_id: int, name: str) -> str:
     return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
@@ -108,11 +114,6 @@ async def cmd_me(message: Message, bot: Bot) -> None:
         )
         return
 
-    timeline = await S.size_timeline(chat_id, user_id)
-    size_spark = S.sparkline([size for _, size in timeline])
-    deltas = await S.daily_deltas(chat_id, user_id)
-    delta_spark = S.sparkline([d for _, d in deltas])
-
     name = _mention(user_id, profile.name)
     lines = [
         texts.profile_header(name),
@@ -131,34 +132,34 @@ async def cmd_me(message: Message, bot: Bot) -> None:
     lines.append(texts.profile_stolen(profile.stolen_total, profile.lost_in_duels))
     lines.append(texts.profile_infections(profile.diseases_caught))
 
-    bank_line = texts.profile_bank(await bank.get_summary(chat_id, user_id))
-    if bank_line:
-        lines.append(bank_line)
+    own_profile = bool(message.from_user and target.id == message.from_user.id)
+    if own_profile:
+        bank_line = texts.profile_bank(await bank.get_summary(chat_id, user_id))
+        if bank_line:
+            lines.append(bank_line)
 
-    poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
-    if poker_stack:
-        lines.append(texts.profile_poker_stack(poker_stack))
+        poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
+        if poker_stack:
+            lines.append(texts.profile_poker_stack(poker_stack))
 
     if profile.current_disease:
         d = DISEASE_BY_ID.get(profile.current_disease)
         if d:
             lines.append(texts.profile_current_disease(d.name))
 
-    if size_spark:
-        lines.append("")
-        lines.append(texts.profile_size_timeline(size_spark))
-    if delta_spark:
-        lines.append(texts.profile_deltas(len(deltas), delta_spark))
-
     # Self-only deep-link to the global profile: the link opens the clicker's
     # own DM and carries no foreign id, so it cannot show someone else's
     # cross-chat stats.
     reply_markup = None
-    if message.from_user and target.id == message.from_user.id:
-        link = await _global_link(bot)
-        if link:
-            reply_markup = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=texts.GLOBAL_BUTTON, url=link)]]
-            )
+    if own_profile:
+        global_link = await _global_link(bot)
+        stats_link = await _stats_link(bot, chat_id, user_id)
+        buttons = []
+        if stats_link:
+            buttons.append(InlineKeyboardButton(text="📊 Подробная статистика", url=stats_link))
+        if global_link:
+            buttons.append(InlineKeyboardButton(text=texts.GLOBAL_BUTTON, url=global_link))
+        if buttons:
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=[[button] for button in buttons])
 
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=reply_markup)

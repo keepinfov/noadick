@@ -17,3 +17,12 @@ class SettingsCallback(CallbackData, prefix="settings"):
 
 class DuelCallback(CallbackData, prefix="duel"):
     token: str
+
+
+class StatsCallback(CallbackData, prefix="stx"):
+    action: str
+    scope: str
+    section: str
+    period: str
+    chat_id: int = 0
+    user_id: int = 0

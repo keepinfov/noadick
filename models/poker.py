@@ -196,6 +196,7 @@ def start_hand(
             "seat": int(seat["seat"]),
             "name": str(seat["name"]),
             "stack": int(seat["stack"]),
+            "start_stack": int(seat["stack"]),
             "cards": [],
             "folded": False,
             "all_in": False,

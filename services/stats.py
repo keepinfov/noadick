@@ -6,20 +6,15 @@ a web panel later.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 
 from repositories import chats as C
 from repositories import events as E
 from repositories import players as P
+from services import settings as chat_settings
 
 BLOCKS = "▁▂▃▄▅▆▇█"
-
-
-def _tz() -> ZoneInfo:
-    return ZoneInfo(key=os.environ.get("TZ", "Europe/Moscow"))
 
 
 def sparkline(values: list[int | float]) -> str:
@@ -63,7 +58,7 @@ async def compute_profile(chat_id: int, user_id: int) -> ProfileStats:
     player = await P.get_player(chat_id, user_id)
     rank = await P.get_rank(chat_id, user_id)
     evs = await E.get_events(chat_id, user_id)
-    tz = _tz()
+    tz = await chat_settings.resolve_tz(chat_id)
 
     plays = 0
     total_grown = 0
@@ -236,7 +231,7 @@ async def size_timeline(chat_id: int, user_id: int) -> list[tuple[int, int]]:
 
 async def daily_deltas(chat_id: int, user_id: int, days: int = 14) -> list[tuple[date, int]]:
     evs = await E.get_events(chat_id, user_id, types=[E.DICK])
-    tz = _tz()
+    tz = await chat_settings.resolve_tz(chat_id)
     by_date: dict[date, int] = {}
     for e in evs:
         d = datetime.fromtimestamp(e.created_at, tz).date()

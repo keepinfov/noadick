@@ -9,10 +9,23 @@ from aiogram.types import BotCommand, ErrorEvent
 
 from config import get_settings
 from db.engine import dispose_engine, init_db
-from handlers import admin, bank, dick, duel, help, modtools, ping, poker, profile, settings, top
+from handlers import (
+    admin,
+    bank,
+    dick,
+    duel,
+    help,
+    modtools,
+    ping,
+    poker,
+    profile,
+    settings,
+    stats,
+    top,
+)
 from middlewares.registry import RegistryMiddleware
 from observability import LoggingContextMiddleware, configure_logging
-from services import backups, global_settings
+from services import backups, global_settings, stats_digest
 from services import bank as bank_service
 
 logger = logging.getLogger(__name__)
@@ -71,6 +84,7 @@ async def main() -> None:
         poker.router,
         bank.router,
         profile.router,
+        stats.router,
         top.router,
         help.router,
         ping.router,
@@ -82,6 +96,7 @@ async def main() -> None:
             BotCommand(command="duel", description="Вызвать на дуэль (ответом)"),
             BotCommand(command="poker", description="Создать или открыть покерный стол"),
             BotCommand(command="me", description="Твой профиль и статистика"),
+            BotCommand(command="stats", description="Подробная статистика и графики"),
             BotCommand(command="top", description="Топ-10 по размеру"),
             BotCommand(command="bank", description="Банк: вклады и кредиты"),
             BotCommand(command="corp", description="Счёт Корпорации"),
@@ -94,6 +109,7 @@ async def main() -> None:
     background_tasks = [
         asyncio.create_task(_collector_loop(bot), name="bank-collector"),
         asyncio.create_task(poker.watchdog_loop(bot), name="poker-watchdog"),
+        asyncio.create_task(stats_digest.loop(bot), name="stats-digest"),
         asyncio.create_task(
             backups.backup_loop(
                 settings_config.db_path,

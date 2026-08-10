@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from db.engine import get_session_factory
 from db.models import (
     ChatCorporation,
+    CorporationLedger,
     Event,
     Loan,
     Player,
@@ -757,6 +758,10 @@ async def save_hand(
     expected_version: int,
     timed_out_uid: int | None = None,
     garnish_pct: int = 0,
+    action: str | None = None,
+    actor_id: int | None = None,
+    action_amount: int | None = None,
+    action_street: str | None = None,
 ) -> PokerHand:
     factory = get_session_factory()
     async with factory() as session:
@@ -787,6 +792,33 @@ async def save_hand(
         table.last_event = state.get("last_action", "")[:256]
         if timed_out_uid is not None and timed_out_uid in seats:
             seats[timed_out_uid].consecutive_timeouts += 1
+
+        if (
+            action is not None
+            and actor_id is not None
+            and table.mode == "money"
+            and table.chat_id is not None
+        ):
+            actor_state = state["players"].get(str(actor_id), {})
+            if actor_state:
+                session.add(
+                    _event(
+                        table.chat_id,
+                        actor_id,
+                        E.POKER_ACTION,
+                        0,
+                        0,
+                        {
+                            "table_id": table_id,
+                            "hand_no": table.hand_no,
+                            "street": action_street or hand.street,
+                            "action": action,
+                            "amount": action_amount,
+                            "timed_out": timed_out_uid is not None,
+                            "folded": bool(actor_state.get("folded")),
+                        },
+                    )
+                )
 
         # Keep the seat read model current during the hand so /me, the admin
         # economy snapshot and crash recovery all see the actual escrowed stack,
@@ -827,6 +859,24 @@ async def save_hand(
                         total_poker_rake=ChatCorporation.total_poker_rake + rake,
                     )
                 )
+                balance, reserve = (
+                    await session.execute(
+                        select(ChatCorporation.balance, ChatCorporation.insurance_reserve).where(
+                            ChatCorporation.chat_id == table.chat_id
+                        )
+                    )
+                ).one()
+                session.add(
+                    CorporationLedger(
+                        chat_id=table.chat_id,
+                        user_id=table.host_id,
+                        reason="poker_rake",
+                        cash_delta=rake,
+                        balance_after=int(balance),
+                        reserve_after=int(reserve),
+                        meta={"table_id": table_id, "hand_no": table.hand_no},
+                    )
+                )
                 session.add(
                     _event(
                         table.chat_id,
@@ -851,6 +901,20 @@ async def save_hand(
                                 "table_id": table_id,
                                 "hand_no": table.hand_no,
                                 "stack": int(player_state["stack"]),
+                                "start_stack": int(
+                                    player_state.get(
+                                        "start_stack",
+                                        int(player_state["stack"])
+                                        + int(player_state.get("total_bet", 0)),
+                                    )
+                                ),
+                                "net": int(player_state["stack"])
+                                - int(player_state.get("start_stack", player_state["stack"])),
+                                "won_pot": any(
+                                    uid in pot.get("payouts", {}) for pot in result.get("pots", [])
+                                ),
+                                "showdown": bool(result.get("showdown")),
+                                "folded": bool(player_state.get("folded")),
                                 "rake": rake,
                             },
                         )

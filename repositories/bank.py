@@ -6,7 +6,15 @@ import time
 from sqlalchemy import delete, func, select, update
 
 from db.engine import get_session_factory
-from db.models import Chat, ChatCorporation, Corporation, Deposit, DepositInsurance, Loan
+from db.models import (
+    Chat,
+    ChatCorporation,
+    Corporation,
+    CorporationLedger,
+    Deposit,
+    DepositInsurance,
+    Loan,
+)
 
 _CORP_ID = 1
 
@@ -50,6 +58,9 @@ async def corp_apply(
     chat_id: int,
     *,
     delta: int,
+    reason: str = "manual_adjustment",
+    user_id: int = 0,
+    meta: dict | None = None,
     tax: int = 0,
     interest_earned: int = 0,
     interest_paid: int = 0,
@@ -89,11 +100,27 @@ async def corp_apply(
                 total_poker_rake=ChatCorporation.total_poker_rake + poker_rake,
             )
         )
-        await session.commit()
-        new_balance = await session.scalar(
-            select(ChatCorporation.balance).where(ChatCorporation.chat_id == chat_id)
+        balance, reserve = (
+            await session.execute(
+                select(ChatCorporation.balance, ChatCorporation.insurance_reserve).where(
+                    ChatCorporation.chat_id == chat_id
+                )
+            )
+        ).one()
+        session.add(
+            CorporationLedger(
+                chat_id=chat_id,
+                user_id=user_id,
+                reason=reason[:32],
+                cash_delta=delta,
+                reserve_delta=insurance_delta,
+                balance_after=int(balance),
+                reserve_after=int(reserve),
+                meta=meta,
+            )
         )
-        return int(new_balance or 0)
+        await session.commit()
+        return int(balance)
 
 
 async def set_rules_urls(rude: str, strict: str) -> None:

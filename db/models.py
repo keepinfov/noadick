@@ -133,6 +133,37 @@ class ChatCorporation(Base):
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
+class CorporationLedger(Base):
+    """Append-only audit trail for every chat-corporation money movement."""
+
+    __tablename__ = "corporation_ledger"
+    __table_args__ = (
+        Index("ix_corp_ledger_chat_ts", "chat_id", "created_at"),
+        Index("ix_corp_ledger_reason_ts", "reason", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    reason: Mapped[str] = mapped_column(String(32))
+    cash_delta: Mapped[int] = mapped_column(Integer, default=0)
+    reserve_delta: Mapped[int] = mapped_column(Integer, default=0)
+    balance_after: Mapped[int] = mapped_column(Integer, default=0)
+    reserve_after: Mapped[int] = mapped_column(Integer, default=0)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class AnalyticsState(Base):
+    """Installation-local watermark for metrics that require the v2 journal."""
+
+    __tablename__ = "analytics_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    detailed_since: Mapped[int] = mapped_column(Integer, default=_now)
+    backfill_completed_at: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Deposit(Base):
     """One active deposit per (chat, user). Opening moves size out of the
     player (freezing it: hidden from /top, unusable in duels, no /dick growth);
@@ -251,7 +282,12 @@ class Event(Base):
     (later) chart generation."""
 
     __tablename__ = "events"
-    __table_args__ = (Index("ix_events_chat_user_ts", "chat_id", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_events_chat_user_ts", "chat_id", "user_id", "created_at"),
+        Index("ix_events_chat_type_ts", "chat_id", "type", "created_at"),
+        Index("ix_events_user_type_ts", "user_id", "type", "created_at"),
+        Index("ix_events_type_ts", "type", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -360,6 +396,10 @@ class ChatSettings(Base):
     poker_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     duel_stake_default: Mapped[int] = mapped_column(Integer, default=5)
     duel_timeout: Mapped[int] = mapped_column(Integer, default=60)
+    stats_digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    stats_digest_weekday: Mapped[int] = mapped_column(Integer, default=0)
+    stats_digest_hour: Mapped[int] = mapped_column(Integer, default=10)
+    stats_digest_last_week: Mapped[str] = mapped_column(String, default="")
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 

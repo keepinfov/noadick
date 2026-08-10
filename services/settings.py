@@ -41,6 +41,9 @@ class EffectiveSettings:
     poker_enabled: bool
     duel_stake_default: int
     duel_timeout: int
+    stats_digest_enabled: bool
+    stats_digest_weekday: int
+    stats_digest_hour: int
 
 
 def _env_tz() -> str:
@@ -69,6 +72,9 @@ async def get_effective(chat_id: int) -> EffectiveSettings:
             poker_enabled=DEFAULT_POKER_ENABLED,
             duel_stake_default=DEFAULT_DUEL_STAKE,
             duel_timeout=DEFAULT_DUEL_TIMEOUT,
+            stats_digest_enabled=False,
+            stats_digest_weekday=0,
+            stats_digest_hour=10,
         )
     else:
         eff = EffectiveSettings(
@@ -78,6 +84,9 @@ async def get_effective(chat_id: int) -> EffectiveSettings:
             poker_enabled=bool(row.poker_enabled),
             duel_stake_default=int(row.duel_stake_default),
             duel_timeout=int(row.duel_timeout),
+            stats_digest_enabled=bool(row.stats_digest_enabled),
+            stats_digest_weekday=int(row.stats_digest_weekday),
+            stats_digest_hour=int(row.stats_digest_hour),
         )
     _cache[chat_id] = (now, eff)
     return eff
@@ -186,3 +195,25 @@ async def toggle_poker(chat_id: int) -> bool:
     await repo.upsert_settings(chat_id, poker_enabled=new_val)
     invalidate(chat_id)
     return new_val
+
+
+async def toggle_stats_digest(chat_id: int) -> bool:
+    eff = await get_effective(chat_id)
+    new_val = not eff.stats_digest_enabled
+    await repo.upsert_settings(chat_id, stats_digest_enabled=new_val)
+    invalidate(chat_id)
+    return new_val
+
+
+async def adjust_stats_digest(chat_id: int, key: str, delta: int) -> int:
+    eff = await get_effective(chat_id)
+    if key == "weekday":
+        value = (eff.stats_digest_weekday + delta) % 7
+        await repo.upsert_settings(chat_id, stats_digest_weekday=value)
+    elif key == "hour":
+        value = (eff.stats_digest_hour + delta) % 24
+        await repo.upsert_settings(chat_id, stats_digest_hour=value)
+    else:
+        raise SettingError(f"unknown_key:{key}")
+    invalidate(chat_id)
+    return value

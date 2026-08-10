@@ -115,6 +115,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
                 ),
             ],
             [InlineKeyboardButton(text=texts.BTN_GSET_CORP, callback_data="adm:gsetcorp")],
+            [InlineKeyboardButton(text="📈 Подробная аналитика", callback_data="adm:astats:g:0:0")],
         ]
     )
 
@@ -285,6 +286,9 @@ async def render_chat(
             InlineKeyboardButton(text=texts.BTN_LOCAL_BANS, callback_data=f"adm:lban:{chat_id}:0"),
         ]
     )
+    rows.append(
+        [InlineKeyboardButton(text="📈 Аналитика чата", callback_data=f"adm:astats:c:{chat_id}:0")]
+    )
     rows.append([InlineKeyboardButton(text=texts.BTN_BACK_LIST, callback_data="adm:chats:0")])
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -338,6 +342,12 @@ async def render_player(
             InlineKeyboardButton(text=texts.BTN_DELETE_PLAYER, callback_data=f"adm:del:{base}"),
         ],
         [
+            InlineKeyboardButton(
+                text="📈 Полная статистика игрока",
+                callback_data=f"adm:astats:u:{chat_id}:{user_id}",
+            )
+        ],
+        [
             ban_btn,
             back_btn,
         ],
@@ -365,6 +375,28 @@ async def _edit(callback: CallbackQuery, text: str, kb: InlineKeyboardMarkup | N
             # swallow it so the button stops spinning instead of erroring out.
             if "message is not modified" not in str(e).lower():
                 raise
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:astats:"))
+async def cb_detailed_stats(callback: CallbackQuery) -> None:
+    from handlers.stats import send_panel
+    from services import analytics
+
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    try:
+        _, _, code, chat_id, user_id = (callback.data or "").split(":")
+        scope = analytics.Scope(
+            {"u": "user", "c": "chat", "g": "global"}[code],
+            int(chat_id),
+            int(user_id),
+        )
+    except (KeyError, ValueError):
+        await callback.answer(texts.CALLBACK_INVALID, show_alert=True)
+        return
+    await send_panel(callback.message, scope, code)
     await callback.answer()
 
 

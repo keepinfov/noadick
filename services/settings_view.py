@@ -108,6 +108,34 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
                 callback_data=SettingsCallback(action="timezone", chat_id=chat_id).pack(),
             )
         ],
+        [
+            InlineKeyboardButton(
+                text=texts.settings_btn_digest(eff.stats_digest_enabled),
+                callback_data=SettingsCallback(action="digest", chat_id=chat_id).pack(),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="◀ День",
+                callback_data=SettingsCallback(
+                    action="dweekday", chat_id=chat_id, value="-1"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="День ▶",
+                callback_data=SettingsCallback(
+                    action="dweekday", chat_id=chat_id, value="1"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="− Час",
+                callback_data=SettingsCallback(action="dhour", chat_id=chat_id, value="-1").pack(),
+            ),
+            InlineKeyboardButton(
+                text="Час +",
+                callback_data=SettingsCallback(action="dhour", chat_id=chat_id, value="1").pack(),
+            ),
+        ],
         _nav_row(chat_id, scope),
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -122,5 +150,8 @@ async def render_settings(chat_id: int, *, scope: str) -> tuple[str, InlineKeybo
         eff.duel_timeout,
         eff.banking_enabled,
         eff.poker_enabled,
+        eff.stats_digest_enabled,
+        eff.stats_digest_weekday,
+        eff.stats_digest_hour,
     )
     return text, settings_kb(chat_id, eff, scope=scope)
