@@ -893,9 +893,9 @@ async def _leaders_dashboard(
         ("Участников рейтинга", _num(len(ids))),
         ("Событий", _num(sum(activity.values()))),
     ]
-    for index, key in enumerate(best[:3], 1):
+    for index, key in enumerate(best, 1):
         metrics.append((f"#{index}", f"{names.get(key, str(key))}: {scores[key]} см"))
-    if worst:
+    if worst and by_chat:
         key = worst[0]
         metrics.append(("Самый нищий", f"{names.get(key, str(key))}: {scores[key]} см"))
     labels = [names.get(key, str(key))[:18] for key in best]
