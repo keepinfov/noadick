@@ -63,13 +63,13 @@ async def test_growth_dashboard_png_and_csv(db) -> None:
     assert ("Нажатий", "2") in data.metrics
     assert ("Чистый итог", "+3 см") in data.metrics
     assert data.chart_kind == "line"
-    assert data.series[0][0] == "Размер"
+    assert data.series[0][0] == "Чистое состояние"
     assert data.series[0][1][-1] == 13
     assert "статистическая пустыня" not in analytics.caption(data)
     assert (await analytics.render_png(data)).startswith(b"\x89PNG\r\n\x1a\n")
     csv_data = analytics.render_csv(data).decode("utf-8-sig")
     assert "раздел;Рост" in csv_data
-    assert "интервал;Размер" in csv_data
+    assert "интервал;Чистое состояние" in csv_data
     assert "ПОСЛЕДНЕЕ;13.0" in csv_data
 
 
@@ -84,10 +84,13 @@ async def test_chat_leaders_are_combined_into_overtake_chart(db) -> None:
     await events.log_event(chat_id, 71, events.BASELINE, size_after=10, created_at=now - 6 * 86400)
     await events.log_event(chat_id, 72, events.BASELINE, size_after=15, created_at=now - 6 * 86400)
     await events.log_event(
-        chat_id, 71, events.DICK, delta=15, size_after=25, created_at=now - 4 * 86400
+        chat_id, 71, events.DICK, delta=30, size_after=40, created_at=now - 4 * 86400
     )
     await events.log_event(
-        chat_id, 72, events.DICK, delta=5, size_after=20, created_at=now - 3 * 86400
+        chat_id, 72, events.DICK, delta=15, size_after=30, created_at=now - 3 * 86400
+    )
+    await events.log_event(
+        chat_id, 71, events.DICK, delta=-20, size_after=20, created_at=now - 2 * 86400
     )
 
     data = await analytics.dashboard(
@@ -106,6 +109,62 @@ async def test_chat_leaders_are_combined_into_overtake_chart(db) -> None:
     assert (await analytics.render_png(data)).startswith(b"\x89PNG\r\n\x1a\n")
     csv_data = analytics.render_csv(data).decode("utf-8-sig")
     assert "интервал;Второй;Первый" in csv_data
+
+
+async def test_chat_growth_is_total_size_timeline(db) -> None:
+    from repositories import events, players
+    from services import analytics
+
+    chat_id = -7003
+    now = 1_800_000_000
+    await players.set_player_fields(chat_id, 81, name="Один", size=20)
+    await players.set_player_fields(chat_id, 82, name="Два", size=30)
+    await events.log_event(chat_id, 81, events.DICK, delta=5, size_after=20, created_at=now - 3600)
+    await events.log_event(chat_id, 82, events.DICK, delta=10, size_after=30, created_at=now - 1800)
+
+    data = await analytics.dashboard(
+        analytics.Scope("chat", chat_id=chat_id), "growth", "d", now=now
+    )
+
+    assert data.chart_kind == "line"
+    assert data.series[0][0] == "Общее чистое состояние"
+    assert data.series[0][1][-1] == 50
+    assert "статистическая пустыня" not in analytics.caption(data)
+
+
+async def test_wealth_includes_deposit_poker_and_debt(db) -> None:
+    from db.engine import get_session_factory
+    from db.models import PokerSeat, PokerTable
+    from repositories import bank, players
+    from services import wealth
+
+    chat_id = -7004
+    user_id = 91
+    await players.set_player_fields(chat_id, user_id, name="Капиталист", size=40)
+    await players.set_player_fields(chat_id, 92, name="Только наличка", size=63)
+    await bank.upsert_deposit(chat_id, user_id, principal=25, accrued=3)
+    await bank.upsert_loan(chat_id, user_id, principal=12, accrued_interest=2)
+    factory = get_session_factory()
+    async with factory() as session:
+        session.add(PokerTable(table_id="wealth01", chat_id=chat_id, host_id=user_id))
+        session.add(
+            PokerSeat(
+                table_id="wealth01",
+                user_id=user_id,
+                seat_no=0,
+                name="Капиталист",
+                stack=9,
+                committed=1,
+            )
+        )
+        await session.commit()
+
+    rows = await wealth.chat_rows(chat_id)
+    row = rows[0]
+
+    assert [value.user_id for value in rows] == [91, 92]
+    assert (row.liquid, row.deposits, row.poker, row.debt) == (40, 28, 10, 14)
+    assert row.net == 64
 
 
 async def test_growth_timeline_recovers_from_events_without_player(db) -> None:
@@ -133,7 +192,7 @@ async def test_growth_timeline_recovers_from_events_without_player(db) -> None:
     )
 
     assert data.labels
-    assert data.series == [("Размер", data.series[0][1])]
+    assert data.series == [("Чистое состояние", data.series[0][1])]
     assert data.series[0][1][-1] == 17
     assert "статистическая пустыня" not in analytics.caption(data)
 

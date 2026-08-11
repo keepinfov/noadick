@@ -35,7 +35,7 @@ from db.models import (
     PokerTable,
 )
 from repositories import events as E
-from services import settings
+from services import settings, wealth
 from services.global_settings import get_config_sync
 
 PERIODS = {"d": "Сегодня", "7": "7 дней", "30": "30 дней", "a": "Всё время"}
@@ -352,7 +352,28 @@ def _period_times(
     return _sample_times([*points, now])
 
 
-def _timeline(
+def _wealth_delta(event: Event) -> int:
+    meta = event.meta or {}
+    if event.type == E.DICK:
+        return int(event.delta) - int(meta.get("roll_debt", 0))
+    if event.type == E.DUEL:
+        return int(meta.get("profit", event.delta)) if meta.get("won") else int(event.delta)
+    if event.type in {E.ADMIN_ADJUST, E.HEALTH_REFORM, E.DEPOSIT_INSURANCE}:
+        return int(event.delta)
+    if event.type == E.DEPOSIT_INTEREST:
+        return int(meta.get("interest", 0))
+    if event.type == E.DEPOSIT_PENALTY:
+        return -int(meta.get("penalty", 0)) - int(meta.get("forfeit_interest", 0))
+    if event.type == E.CONFISCATION:
+        return int(event.delta) or -int(meta.get("seized", 0))
+    if event.type == E.LOAN_INTEREST:
+        return -int(meta.get("interest", 0))
+    if event.type == E.POKER_RESULT:
+        return int(meta.get("net", 0))
+    return 0
+
+
+def _wealth_timeline(
     events: list[Event],
     entity_ids: list[int],
     names: dict[int, str],
@@ -368,24 +389,18 @@ def _timeline(
         return [], []
     ordered_events = sorted(events, key=lambda event: (event.created_at, event.id))
     times = _period_times(ordered_events, period, since, now, zone)
-    states = {entity_id: math.nan for entity_id in entity_ids}
     values = {entity_id: [] for entity_id in entity_ids}
-    event_index = 0
     for timestamp in times:
-        while (
-            event_index < len(ordered_events)
-            and ordered_events[event_index].created_at <= timestamp
-        ):
-            event = ordered_events[event_index]
-            key = int(entity_key(event))
-            if key in states:
-                states[key] = float(event.size_after)
-            event_index += 1
-        if timestamp == now:
-            for entity_id, size in current.items():
-                states[entity_id] = float(size)
         for entity_id in entity_ids:
-            values[entity_id].append(states[entity_id])
+            if entity_id not in current:
+                values[entity_id].append(math.nan)
+                continue
+            future_delta = sum(
+                _wealth_delta(event)
+                for event in ordered_events
+                if event.created_at > timestamp and int(entity_key(event)) == entity_id
+            )
+            values[entity_id].append(float(current[entity_id] - future_delta))
     return _line_labels(times, period, zone), [
         (names.get(entity_id, str(entity_id))[:24], values[entity_id]) for entity_id in entity_ids
     ]
@@ -394,20 +409,22 @@ def _timeline(
 async def _growth_timeline(
     scope: Scope, period: str, zone: ZoneInfo, now: int
 ) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    if scope.kind in {"chat", "global"}:
+        return await _aggregate_growth_timeline(scope, period, zone, now)
+    wealth_rows = await wealth.rows(
+        chat_id=scope.chat_id if scope.kind == "user" else None,
+        user_id=scope.user_id,
+    )
     factory = get_session_factory()
     async with factory() as session:
         event_stmt = select(Event).where(
             Event.user_id == scope.user_id,
-            Event.type.in_(SIZE_EVENT_TYPES),
             Event.created_at <= now,
         )
-        player_stmt = select(Player.chat_id, Player.size).where(Player.user_id == scope.user_id)
         if scope.kind == "user":
             event_stmt = event_stmt.where(Event.chat_id == scope.chat_id)
-            player_stmt = player_stmt.where(Player.chat_id == scope.chat_id)
         events = list((await session.execute(event_stmt.order_by(Event.created_at))).scalars())
-        players = (await session.execute(player_stmt)).all()
-        player_chat_ids = {int(chat_id) for chat_id, _size in players}
+        player_chat_ids = {row.chat_id for row in wealth_rows}
         event_chat_ids = {int(event.chat_id) for event in events}
         chat_ids = sorted(player_chat_ids | event_chat_ids)
         if scope.kind == "user":
@@ -421,18 +438,16 @@ async def _growth_timeline(
             if chat_ids
             else []
         )
-    # Events are append-only and can outlive or predate a fully linked Player
-    # row.  Use their latest snapshot as a fallback, then let the current player
-    # state override it where available.
     current: dict[int, int] = {}
     for event in events:
-        current[int(event.chat_id)] = int(event.size_after)
-    current.update({int(chat_id): int(size) for chat_id, size in players})
+        if event.type in SIZE_EVENT_TYPES:
+            current[int(event.chat_id)] = int(event.size_after)
+    current.update({row.chat_id: row.net for row in wealth_rows})
     chat_names = {int(chat_id): str(title or chat_id) for chat_id, title in title_rows}
     if scope.kind == "user":
-        chat_names[scope.chat_id] = "Размер"
+        chat_names[scope.chat_id] = "Чистое состояние"
         chat_ids = [scope.chat_id]
-    return _timeline(
+    return _wealth_timeline(
         events,
         chat_ids,
         chat_names,
@@ -445,24 +460,43 @@ async def _growth_timeline(
     )
 
 
+async def _aggregate_growth_timeline(
+    scope: Scope, period: str, zone: ZoneInfo, now: int
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    wealth_rows = await wealth.rows(chat_id=scope.chat_id if scope.kind == "chat" else None)
+    factory = get_session_factory()
+    async with factory() as session:
+        event_stmt = select(Event).where(
+            Event.created_at <= now,
+            Event.user_id != 0,
+        )
+        if scope.kind == "chat":
+            event_stmt = event_stmt.where(Event.chat_id == scope.chat_id)
+        events = list(
+            (await session.execute(event_stmt.order_by(Event.created_at, Event.id))).scalars()
+        )
+
+    times = _period_times(events, period, _since(period, zone, now), now, zone)
+    current = {(row.chat_id, row.user_id): float(row.net) for row in wealth_rows}
+    persisted = set(current)
+    for event in events:
+        key = (int(event.chat_id), int(event.user_id))
+        if event.type in SIZE_EVENT_TYPES and key not in persisted:
+            current[key] = float(event.size_after)
+    values: list[float] = []
+    for timestamp in times:
+        future_delta = sum(_wealth_delta(event) for event in events if event.created_at > timestamp)
+        values.append(sum(current.values()) - future_delta)
+    return _line_labels(times, period, zone), [("Общее чистое состояние", values)]
+
+
 async def _chat_leader_timeline(
     chat_id: int, period: str, zone: ZoneInfo, now: int
 ) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    leaders = (await wealth.chat_rows(chat_id))[:10]
+    user_ids = [player.user_id for player in leaders]
     factory = get_session_factory()
     async with factory() as session:
-        leaders = list(
-            (
-                await session.execute(
-                    select(Player)
-                    .where(Player.chat_id == chat_id)
-                    .order_by(Player.size.desc(), Player.user_id)
-                    .limit(10)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        user_ids = [int(player.user_id) for player in leaders]
         events = (
             list(
                 (
@@ -471,7 +505,6 @@ async def _chat_leader_timeline(
                         .where(
                             Event.chat_id == chat_id,
                             Event.user_id.in_(user_ids),
-                            Event.type.in_(SIZE_EVENT_TYPES),
                             Event.created_at <= now,
                         )
                         .order_by(Event.created_at)
@@ -481,13 +514,13 @@ async def _chat_leader_timeline(
             if user_ids
             else []
         )
-    names = {int(player.user_id): str(player.name or player.user_id) for player in leaders}
+    names = {player.user_id: player.name for player in leaders}
     duplicates = Counter(names.values())
     for user_id, name in list(names.items()):
         if duplicates[name] > 1:
             names[user_id] = f"{name} · {str(user_id)[-4:]}"
-    current = {int(player.user_id): int(player.size) for player in leaders}
-    return _timeline(
+    current = {player.user_id: player.net for player in leaders}
+    return _wealth_timeline(
         events,
         user_ids,
         names,
@@ -565,7 +598,7 @@ async def dashboard(
             ("Эмиссия", f"{sum(int((e.meta or {}).get('emitted', 0)) for e in relevant)} см"),
             ("Срезано", f"{sum(int((e.meta or {}).get('clipped', 0)) for e in relevant)} см"),
         ]
-        chart_title = "Размер по времени"
+        chart_title = "Чистое состояние по времени"
         chart_ylabel = "см"
         labels, chart_series = await _growth_timeline(scope, period, zone, now)
         values = chart_series[0][1] if chart_series else []
@@ -822,7 +855,6 @@ async def _leaders_dashboard(
     zone: ZoneInfo,
     now: int,
 ) -> Dashboard:
-    scores: dict[int, int] = defaultdict(int)
     activity: Counter[int] = Counter()
     by_chat = scope.kind == "global"
     for event in events:
@@ -830,21 +862,15 @@ async def _leaders_dashboard(
         if not key:
             continue
         activity[key] += 1
-        if event.type in {E.DICK, E.DUEL}:
-            scores[key] += event.delta
-        elif event.type == E.POKER_RESULT:
-            scores[key] += int((event.meta or {}).get("net", 0))
-        elif event.type == E.DEPOSIT_INTEREST:
-            scores[key] += int((event.meta or {}).get("interest", 0))
-        elif event.type in {E.LOAN_INTEREST, E.CONFISCATION, E.DEPOSIT_PENALTY}:
-            scores[key] -= abs(event.delta) or int(
-                (event.meta or {}).get("interest", (event.meta or {}).get("seized", 0))
-            )
-    ids = set(scores) | set(activity)
+    wealth_rows = await wealth.rows(chat_id=None if by_chat else scope.chat_id)
+    scores: dict[int, int] = defaultdict(int)
     names: dict[int, str] = {}
-    factory = get_session_factory()
-    async with factory() as session:
-        if by_chat:
+    if by_chat:
+        for row in wealth_rows:
+            scores[row.chat_id] += row.net
+        ids = set(scores)
+        factory = get_session_factory()
+        async with factory() as session:
             rows = (
                 (
                     await session.execute(
@@ -854,13 +880,12 @@ async def _leaders_dashboard(
                 if ids
                 else []
             )
-        else:
-            stmt = select(Player.user_id, Player.name).where(Player.user_id.in_(ids))
-            if scope.chat_id:
-                stmt = stmt.where(Player.chat_id == scope.chat_id)
-            rows = (await session.execute(stmt)).all() if ids else []
-        for key, name in rows:
-            names.setdefault(int(key), str(name or key))
+        names.update({int(key): str(name or key) for key, name in rows})
+    else:
+        for row in wealth_rows:
+            scores[row.user_id] = row.net
+            names[row.user_id] = row.name
+    ids = set(scores)
     ordered = sorted(ids, key=lambda key: (scores[key], activity[key]), reverse=True)
     best = ordered[:10]
     worst = sorted(ids, key=lambda key: scores[key])[:3]
@@ -869,22 +894,22 @@ async def _leaders_dashboard(
         ("Событий", _num(sum(activity.values()))),
     ]
     for index, key in enumerate(best[:3], 1):
-        metrics.append((f"#{index}", f"{names.get(key, str(key))}: {scores[key]:+d} см"))
+        metrics.append((f"#{index}", f"{names.get(key, str(key))}: {scores[key]} см"))
     if worst:
         key = worst[0]
-        metrics.append(("Главный потерпевший", f"{names.get(key, str(key))}: {scores[key]:+d} см"))
+        metrics.append(("Самый нищий", f"{names.get(key, str(key))}: {scores[key]} см"))
     labels = [names.get(key, str(key))[:18] for key in best]
     values = [float(scores[key]) for key in best]
     chart_kind = "bar"
     chart_series: list[tuple[str, list[float]]] = []
-    chart_title = "Чаты по результату" if by_chat else "Игроки по результату"
+    chart_title = "Чистое состояние чатов" if by_chat else "Чистое состояние игроков"
     note = ""
     if scope.kind in {"chat", "leaderboard"}:
         labels, chart_series = await _chat_leader_timeline(scope.chat_id, period, zone, now)
         values = chart_series[0][1] if chart_series else []
         chart_kind = "line"
         chart_title = "Гонка текущих лидеров"
-        note = "Линии показывают текущую десятку чата; между событиями размер переносится без изменений."
+        note = "Текущая десятка чата по наличке, вкладам и покеру за вычетом долгов."
     return Dashboard(
         title,
         "leaders",
@@ -955,7 +980,6 @@ def _render_sync(data: Dashboard) -> bytes:
                     marker="o",
                     markersize=3.5,
                     linewidth=2,
-                    drawstyle="steps-post",
                     label=name,
                 )
             if len(plotted) > 1:

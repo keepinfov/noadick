@@ -122,7 +122,7 @@ def dick_result(mention: str, change_text: str, size: int, rank: int, remaining:
 # ---------------------------------------------------------------------- /top ---
 
 TOP_EMPTY = "😥 Пока нет игроков\nПрисоединяйся — напиши /dick"
-TOP_HEADER = "🏆 Топ 10:\n"
+TOP_HEADER = "🏆 <b>Топ-10 по чистому состоянию:</b>\n"
 
 
 def top_line(rank: int, name: str, tag: str, size: int) -> str:
