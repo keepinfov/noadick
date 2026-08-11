@@ -65,6 +65,7 @@ async def test_growth_dashboard_png_and_csv(db) -> None:
     assert data.chart_kind == "line"
     assert data.series[0][0] == "Размер"
     assert data.series[0][1][-1] == 13
+    assert "статистическая пустыня" not in analytics.caption(data)
     assert (await analytics.render_png(data)).startswith(b"\x89PNG\r\n\x1a\n")
     csv_data = analytics.render_csv(data).decode("utf-8-sig")
     assert "раздел;Рост" in csv_data
@@ -105,6 +106,36 @@ async def test_chat_leaders_are_combined_into_overtake_chart(db) -> None:
     assert (await analytics.render_png(data)).startswith(b"\x89PNG\r\n\x1a\n")
     csv_data = analytics.render_csv(data).decode("utf-8-sig")
     assert "интервал;Второй;Первый" in csv_data
+
+
+async def test_growth_timeline_recovers_from_events_without_player(db) -> None:
+    from repositories import events
+    from services import analytics
+
+    chat_id = -7002
+    user_id = 73
+    now = 1_800_000_000
+    await events.log_event(
+        chat_id,
+        user_id,
+        events.DICK,
+        delta=7,
+        size_after=17,
+        meta={"rolled": 7},
+        created_at=now - 3600,
+    )
+
+    data = await analytics.dashboard(
+        analytics.Scope("user", chat_id=chat_id, user_id=user_id),
+        "growth",
+        "d",
+        now=now,
+    )
+
+    assert data.labels
+    assert data.series == [("Размер", data.series[0][1])]
+    assert data.series[0][1][-1] == 17
+    assert "статистическая пустыня" not in analytics.caption(data)
 
 
 async def test_corporation_movements_are_audited(db) -> None:

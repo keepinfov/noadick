@@ -83,6 +83,7 @@ SIZE_EVENT_TYPES = {
     E.DICK,
     E.DUEL,
     E.ADMIN_ADJUST,
+    E.DEPOSIT_INSURANCE,
     E.DEPOSIT_OPEN,
     E.DEPOSIT_WITHDRAW,
     E.LOAN_OPEN,
@@ -406,7 +407,11 @@ async def _growth_timeline(
             player_stmt = player_stmt.where(Player.chat_id == scope.chat_id)
         events = list((await session.execute(event_stmt.order_by(Event.created_at))).scalars())
         players = (await session.execute(player_stmt)).all()
-        chat_ids = [int(chat_id) for chat_id, _size in players]
+        player_chat_ids = {int(chat_id) for chat_id, _size in players}
+        event_chat_ids = {int(event.chat_id) for event in events}
+        chat_ids = sorted(player_chat_ids | event_chat_ids)
+        if scope.kind == "user":
+            chat_ids = [scope.chat_id]
         title_rows = (
             (
                 await session.execute(
@@ -416,7 +421,13 @@ async def _growth_timeline(
             if chat_ids
             else []
         )
-    current = {int(chat_id): int(size) for chat_id, size in players}
+    # Events are append-only and can outlive or predate a fully linked Player
+    # row.  Use their latest snapshot as a fallback, then let the current player
+    # state override it where available.
+    current: dict[int, int] = {}
+    for event in events:
+        current[int(event.chat_id)] = int(event.size_after)
+    current.update({int(chat_id): int(size) for chat_id, size in players})
     chat_names = {int(chat_id): str(title or chat_id) for chat_id, title in title_rows}
     if scope.kind == "user":
         chat_names[scope.chat_id] = "Размер"
@@ -917,7 +928,12 @@ def caption(data: Dashboard) -> str:
         note = f"ℹ️ {html.escape(data.note)}"
         if len("\n".join([*lines, "", note])) <= 1000:
             lines.extend(["", note])
-    if not data.labels:
+    has_chart_data = bool(data.labels) and (
+        any(any(math.isfinite(value) for value in values) for _name, values in data.series)
+        if data.series
+        else bool(data.values)
+    )
+    if not has_chart_data:
         lines.extend(["", "За этот период статистическая пустыня. Даже обосраться не успели."])
     return "\n".join(lines)
 
