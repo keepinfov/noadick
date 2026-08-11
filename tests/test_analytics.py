@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -61,11 +62,49 @@ async def test_growth_dashboard_png_and_csv(db) -> None:
 
     assert ("Нажатий", "2") in data.metrics
     assert ("Чистый итог", "+3 см") in data.metrics
-    assert sum(data.values) == 3
+    assert data.chart_kind == "line"
+    assert data.series[0][0] == "Размер"
+    assert data.series[0][1][-1] == 13
     assert (await analytics.render_png(data)).startswith(b"\x89PNG\r\n\x1a\n")
     csv_data = analytics.render_csv(data).decode("utf-8-sig")
     assert "раздел;Рост" in csv_data
-    assert "ИТОГО;3.0" in csv_data
+    assert "интервал;Размер" in csv_data
+    assert "ПОСЛЕДНЕЕ;13.0" in csv_data
+
+
+async def test_chat_leaders_are_combined_into_overtake_chart(db) -> None:
+    from repositories import events, players
+    from services import analytics
+
+    chat_id = -7001
+    now = 1_800_000_000
+    await players.set_player_fields(chat_id, 71, name="Первый", size=20)
+    await players.set_player_fields(chat_id, 72, name="Второй", size=30)
+    await events.log_event(chat_id, 71, events.BASELINE, size_after=10, created_at=now - 6 * 86400)
+    await events.log_event(chat_id, 72, events.BASELINE, size_after=15, created_at=now - 6 * 86400)
+    await events.log_event(
+        chat_id, 71, events.DICK, delta=15, size_after=25, created_at=now - 4 * 86400
+    )
+    await events.log_event(
+        chat_id, 72, events.DICK, delta=5, size_after=20, created_at=now - 3 * 86400
+    )
+
+    data = await analytics.dashboard(
+        analytics.Scope("chat", chat_id=chat_id), "leaders", "7", now=now
+    )
+
+    assert data.chart_kind == "line"
+    assert [name for name, _values in data.series] == ["Второй", "Первый"]
+    second = data.series[0][1]
+    first = data.series[1][1]
+    assert any(
+        first_value > second_value for first_value, second_value in zip(first, second, strict=True)
+    )
+    assert second[-1] == 30
+    assert first[-1] == 20
+    assert (await analytics.render_png(data)).startswith(b"\x89PNG\r\n\x1a\n")
+    csv_data = analytics.render_csv(data).decode("utf-8-sig")
+    assert "интервал;Второй;Первый" in csv_data
 
 
 async def test_corporation_movements_are_audited(db) -> None:
@@ -115,12 +154,21 @@ async def test_dashboard_authorization_is_fail_closed(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(stats_handler, "is_chat_admin", AsyncMock(return_value=False))
     monkeypatch.setattr(stats_handler, "is_global_admin", lambda _user_id: False)
+    monkeypatch.setattr(
+        stats_handler.chats_repo, "get_chat", AsyncMock(return_value=SimpleNamespace(type="group"))
+    )
     bot = AsyncMock()
     assert await stats_handler._allowed(bot, 71, analytics.Scope("user", -7001, 71))
     assert not await stats_handler._allowed(bot, 72, analytics.Scope("user", -7001, 71))
     assert not await stats_handler._allowed(bot, 72, analytics.Scope("chat", -7001, 0))
     assert not stats_handler._section_allowed(analytics.Scope("personal", user_id=71), "corp")
     assert stats_handler._section_allowed(analytics.Scope("chat", chat_id=-7001), "corp")
+    public_scope = analytics.Scope("leaderboard", chat_id=-7001)
+    assert await stats_handler._allowed(bot, 72, public_scope)
+    assert stats_handler._section_allowed(public_scope, "leaders")
+    assert not stats_handler._section_allowed(public_scope, "bank")
+    stats_handler.chats_repo.get_chat.return_value = SimpleNamespace(type="private")
+    assert not await stats_handler._allowed(bot, 72, public_scope)
 
 
 async def test_weekly_digest_is_not_duplicated(db, monkeypatch: pytest.MonkeyPatch) -> None:

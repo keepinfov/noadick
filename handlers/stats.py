@@ -16,6 +16,7 @@ from aiogram.types import (
 
 from callbacks import StatsCallback
 from handlers.replies import reply_target
+from repositories import chats as chats_repo
 from services import analytics
 from services.admins import is_global_admin
 from services.chat_admin import is_chat_admin
@@ -36,7 +37,7 @@ _SECTION_LABELS = {
 
 def _scope(code: str, chat_id: int, user_id: int) -> analytics.Scope:
     return analytics.Scope(
-        {"u": "user", "p": "personal", "c": "chat", "g": "global"}[code],
+        {"u": "user", "p": "personal", "c": "chat", "l": "leaderboard", "g": "global"}[code],
         chat_id,
         user_id,
     )
@@ -49,17 +50,26 @@ async def _allowed(bot: Bot, viewer: int, scope: analytics.Scope) -> bool:
         return viewer == scope.user_id
     if scope.kind == "user":
         return viewer == scope.user_id or await is_chat_admin(bot, scope.chat_id, viewer)
+    if scope.kind == "leaderboard":
+        chat = await chats_repo.get_chat(scope.chat_id)
+        return bool(chat and chat.type in {"group", "supergroup"})
     if scope.kind == "chat":
         return await is_chat_admin(bot, scope.chat_id, viewer)
     return False
 
 
 def _section_allowed(scope: analytics.Scope, section: str) -> bool:
+    if scope.kind == "leaderboard":
+        return section == "leaders"
     return section not in {"leaders", "corp"} or scope.kind in {"chat", "global"}
 
 
 def _kb(code: str, scope: analytics.Scope, section: str, period: str) -> InlineKeyboardMarkup:
-    sections = ["overview", "growth", "duels", "bank", "poker", "health"]
+    sections = (
+        ["leaders"]
+        if scope.kind == "leaderboard"
+        else ["overview", "growth", "duels", "bank", "poker", "health"]
+    )
     if scope.kind in {"chat", "global"}:
         sections.extend(["leaders", "corp"])
     rows: list[list[InlineKeyboardButton]] = []
@@ -117,13 +127,15 @@ def _kb(code: str, scope: analytics.Scope, section: str, period: str) -> InlineK
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def send_panel(message: Message, scope: analytics.Scope, code: str) -> None:
-    data = await analytics.dashboard(scope, "overview", "30")
+async def send_panel(
+    message: Message, scope: analytics.Scope, code: str, section: str = "overview"
+) -> None:
+    data = await analytics.dashboard(scope, section, "30")
     png = await analytics.render_png(data)
     await message.answer_photo(
         BufferedInputFile(png, filename="stats.png"),
         caption=analytics.caption(data),
-        reply_markup=_kb(code, scope, "overview", "30"),
+        reply_markup=_kb(code, scope, section, "30"),
         parse_mode="HTML",
     )
 
@@ -149,11 +161,9 @@ async def cmd_stats(message: Message, command: CommandObject, bot: Bot) -> None:
     wants_chat = (command.args or "").strip().lower() in {"chat", "чат"}
     admin = is_global_admin(user.id) or await is_chat_admin(bot, message.chat.id, user.id)
     if wants_chat:
-        if not admin:
-            await message.answer("Статистика всего чата — для админов. Считай пока свои грехи.")
-            return
-        payload = f"stats_c_{message.chat.id}_0"
-        label = "📊 Статистика чата в ЛС"
+        code = "c" if admin else "l"
+        payload = f"stats_{code}_{message.chat.id}_0"
+        label = "📊 Статистика чата в ЛС" if admin else "🏁 Гонка лидеров в ЛС"
     else:
         target_id = target.id if target else user.id
         if target_id != user.id and not admin:
@@ -189,7 +199,7 @@ async def start_stats(message: Message, command: CommandObject, bot: Bot) -> Non
     if not await _allowed(bot, message.from_user.id, scope):
         await message.answer("Руки убрал: на эту статистику у тебя прав не выросло.")
         return
-    await send_panel(message, scope, code)
+    await send_panel(message, scope, code, "leaders" if code == "l" else "overview")
 
 
 @router.callback_query(StatsCallback.filter())

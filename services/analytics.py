@@ -10,10 +10,11 @@ import asyncio
 import csv
 import html
 import io
+import math
 import os
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from statistics import median
 from zoneinfo import ZoneInfo
@@ -57,7 +58,7 @@ _PNG_CACHE_MAX = 32
 
 @dataclass(frozen=True)
 class Scope:
-    kind: str  # user, personal, chat, global
+    kind: str  # user, personal, chat, leaderboard, global
     chat_id: int = 0
     user_id: int = 0
 
@@ -73,6 +74,25 @@ class Dashboard:
     chart_title: str
     chart_ylabel: str = "см"
     note: str = ""
+    chart_kind: str = "bar"
+    series: list[tuple[str, list[float]]] = field(default_factory=list)
+
+
+SIZE_EVENT_TYPES = {
+    E.BASELINE,
+    E.DICK,
+    E.DUEL,
+    E.ADMIN_ADJUST,
+    E.DEPOSIT_OPEN,
+    E.DEPOSIT_WITHDRAW,
+    E.LOAN_OPEN,
+    E.LOAN_REPAY,
+    E.LOAN_GARNISH,
+    E.HEALTH_REFORM,
+    E.POKER_BUYIN,
+    E.POKER_TOPUP,
+    E.POKER_CASHOUT,
+}
 
 
 def _system_tz() -> ZoneInfo:
@@ -101,7 +121,7 @@ def _event_matches(scope: Scope, stmt):
         return stmt.where(Event.chat_id == scope.chat_id, Event.user_id == scope.user_id)
     if scope.kind == "personal":
         return stmt.where(Event.user_id == scope.user_id)
-    if scope.kind == "chat":
+    if scope.kind in {"chat", "leaderboard"}:
         return stmt.where(Event.chat_id == scope.chat_id)
     return stmt
 
@@ -157,7 +177,7 @@ async def _snapshot(scope: Scope) -> dict[str, int]:
             dep_stmt = dep_stmt.where(Deposit.user_id == scope.user_id)
             loan_stmt = loan_stmt.where(Loan.user_id == scope.user_id)
             poker_stmt = poker_stmt.where(PokerSeat.user_id == scope.user_id)
-        elif scope.kind == "chat":
+        elif scope.kind in {"chat", "leaderboard"}:
             player_stmt = player_stmt.where(Player.chat_id == scope.chat_id)
             dep_stmt = dep_stmt.where(Deposit.chat_id == scope.chat_id)
             loan_stmt = loan_stmt.where(Loan.chat_id == scope.chat_id)
@@ -193,7 +213,7 @@ async def _title(scope: Scope) -> str:
                 stmt = stmt.where(Player.chat_id == scope.chat_id)
             name = (await session.execute(stmt.limit(1))).scalar_one_or_none()
             return name or str(scope.user_id)
-        if scope.kind == "chat":
+        if scope.kind in {"chat", "leaderboard"}:
             chat = await session.get(Chat, scope.chat_id)
             return chat.title if chat and chat.title else str(scope.chat_id)
     return "Вся система"
@@ -282,6 +302,193 @@ def _series(
     return labels, values
 
 
+def _line_labels(times: list[int], period: str, zone: ZoneInfo) -> list[str]:
+    short_all = period == "a" and bool(times) and times[-1] - times[0] <= 60 * 86400
+    pattern = (
+        "%H:%M" if period == "d" else ("%d.%m" if period in {"7", "30"} or short_all else "%m.%Y")
+    )
+    return [datetime.fromtimestamp(timestamp, zone).strftime(pattern) for timestamp in times]
+
+
+def _sample_times(times: list[int], maximum: int = 60) -> list[int]:
+    ordered = sorted(set(times))
+    if len(ordered) <= maximum:
+        return ordered
+    indexes = {round(index * (len(ordered) - 1) / (maximum - 1)) for index in range(maximum)}
+    return [ordered[index] for index in sorted(indexes)]
+
+
+def _period_times(
+    events: list[Event], period: str, since: int | None, now: int, zone: ZoneInfo
+) -> list[int]:
+    if since is not None:
+        cursor = datetime.fromtimestamp(since, zone)
+        step = timedelta(hours=1) if period == "d" else timedelta(days=1)
+        points: list[int] = []
+        while cursor.timestamp() < now:
+            points.append(int(cursor.timestamp()))
+            cursor += step
+        return _sample_times([*points, now])
+    if not events:
+        return [now]
+    first = datetime.fromtimestamp(events[0].created_at, zone)
+    current = datetime.fromtimestamp(now, zone)
+    if (current - first).days <= 60:
+        cursor = first.replace(hour=0, minute=0, second=0, microsecond=0)
+        points = []
+        while cursor < current:
+            points.append(int(cursor.timestamp()))
+            cursor += timedelta(days=1)
+        return _sample_times([*points, now])
+    cursor = first.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    points = []
+    while cursor < current:
+        points.append(int(cursor.timestamp()))
+        year, month = cursor.year, cursor.month + 1
+        if month == 13:
+            year, month = year + 1, 1
+        cursor = cursor.replace(year=year, month=month)
+    return _sample_times([*points, now])
+
+
+def _timeline(
+    events: list[Event],
+    entity_ids: list[int],
+    names: dict[int, str],
+    current: dict[int, int],
+    *,
+    entity_key,
+    since: int | None,
+    now: int,
+    period: str,
+    zone: ZoneInfo,
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    if not entity_ids:
+        return [], []
+    ordered_events = sorted(events, key=lambda event: (event.created_at, event.id))
+    times = _period_times(ordered_events, period, since, now, zone)
+    states = {entity_id: math.nan for entity_id in entity_ids}
+    values = {entity_id: [] for entity_id in entity_ids}
+    event_index = 0
+    for timestamp in times:
+        while (
+            event_index < len(ordered_events)
+            and ordered_events[event_index].created_at <= timestamp
+        ):
+            event = ordered_events[event_index]
+            key = int(entity_key(event))
+            if key in states:
+                states[key] = float(event.size_after)
+            event_index += 1
+        if timestamp == now:
+            for entity_id, size in current.items():
+                states[entity_id] = float(size)
+        for entity_id in entity_ids:
+            values[entity_id].append(states[entity_id])
+    return _line_labels(times, period, zone), [
+        (names.get(entity_id, str(entity_id))[:24], values[entity_id]) for entity_id in entity_ids
+    ]
+
+
+async def _growth_timeline(
+    scope: Scope, period: str, zone: ZoneInfo, now: int
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    factory = get_session_factory()
+    async with factory() as session:
+        event_stmt = select(Event).where(
+            Event.user_id == scope.user_id,
+            Event.type.in_(SIZE_EVENT_TYPES),
+            Event.created_at <= now,
+        )
+        player_stmt = select(Player.chat_id, Player.size).where(Player.user_id == scope.user_id)
+        if scope.kind == "user":
+            event_stmt = event_stmt.where(Event.chat_id == scope.chat_id)
+            player_stmt = player_stmt.where(Player.chat_id == scope.chat_id)
+        events = list((await session.execute(event_stmt.order_by(Event.created_at))).scalars())
+        players = (await session.execute(player_stmt)).all()
+        chat_ids = [int(chat_id) for chat_id, _size in players]
+        title_rows = (
+            (
+                await session.execute(
+                    select(Chat.chat_id, Chat.title).where(Chat.chat_id.in_(chat_ids))
+                )
+            ).all()
+            if chat_ids
+            else []
+        )
+    current = {int(chat_id): int(size) for chat_id, size in players}
+    chat_names = {int(chat_id): str(title or chat_id) for chat_id, title in title_rows}
+    if scope.kind == "user":
+        chat_names[scope.chat_id] = "Размер"
+        chat_ids = [scope.chat_id]
+    return _timeline(
+        events,
+        chat_ids,
+        chat_names,
+        current,
+        entity_key=lambda event: event.chat_id,
+        since=_since(period, zone, now),
+        now=now,
+        period=period,
+        zone=zone,
+    )
+
+
+async def _chat_leader_timeline(
+    chat_id: int, period: str, zone: ZoneInfo, now: int
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    factory = get_session_factory()
+    async with factory() as session:
+        leaders = list(
+            (
+                await session.execute(
+                    select(Player)
+                    .where(Player.chat_id == chat_id)
+                    .order_by(Player.size.desc(), Player.user_id)
+                    .limit(10)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        user_ids = [int(player.user_id) for player in leaders]
+        events = (
+            list(
+                (
+                    await session.execute(
+                        select(Event)
+                        .where(
+                            Event.chat_id == chat_id,
+                            Event.user_id.in_(user_ids),
+                            Event.type.in_(SIZE_EVENT_TYPES),
+                            Event.created_at <= now,
+                        )
+                        .order_by(Event.created_at)
+                    )
+                ).scalars()
+            )
+            if user_ids
+            else []
+        )
+    names = {int(player.user_id): str(player.name or player.user_id) for player in leaders}
+    duplicates = Counter(names.values())
+    for user_id, name in list(names.items()):
+        if duplicates[name] > 1:
+            names[user_id] = f"{name} · {str(user_id)[-4:]}"
+    current = {int(player.user_id): int(player.size) for player in leaders}
+    return _timeline(
+        events,
+        user_ids,
+        names,
+        current,
+        entity_key=lambda event: event.user_id,
+        since=_since(period, zone, now),
+        now=now,
+        period=period,
+        zone=zone,
+    )
+
+
 async def dashboard(
     scope: Scope, section: str, period: str, *, now: int | None = None
 ) -> Dashboard:
@@ -298,6 +505,8 @@ async def dashboard(
     chart_ylabel = "события"
     relevant = events
     value_fn = _one
+    chart_kind = "bar"
+    chart_series: list[tuple[str, list[float]]] = []
 
     if section == "overview":
         assets = snap["liquid"] + snap["deposits"] + snap["deposit_interest"] + snap["poker"]
@@ -345,9 +554,11 @@ async def dashboard(
             ("Эмиссия", f"{sum(int((e.meta or {}).get('emitted', 0)) for e in relevant)} см"),
             ("Срезано", f"{sum(int((e.meta or {}).get('clipped', 0)) for e in relevant)} см"),
         ]
-        chart_title = "Чистый результат /dick"
+        chart_title = "Размер по времени"
         chart_ylabel = "см"
-        value_fn = _delta
+        labels, chart_series = await _growth_timeline(scope, period, zone, now)
+        values = chart_series[0][1] if chart_series else []
+        chart_kind = "line"
     elif section == "duels":
         relevant = [event for event in events if event.type == E.DUEL]
         wins = sum(bool((event.meta or {}).get("won")) for event in relevant)
@@ -504,16 +715,27 @@ async def dashboard(
         chart_title = "Страховка и заражения"
         chart_ylabel = "случаи"
     elif section == "leaders":
-        return await _leaders_dashboard(scope, period, events, title)
+        return await _leaders_dashboard(scope, period, events, title, zone, now)
     else:
         return await _corporation_dashboard(scope, period, zone, now, title)
 
-    labels, values = _series(relevant, period, zone, value_fn)
+    if section != "growth":
+        labels, values = _series(relevant, period, zone, value_fn)
     note = ""
     if section in {"bank", "poker"} and watermark and (_since(period, zone, now) or 0) < watermark:
         note = f"Детальная разбивка гарантированно точна с {datetime.fromtimestamp(watermark, zone):%d.%m.%Y}."
     return Dashboard(
-        title, section, period, metrics, labels, values, chart_title, chart_ylabel, note
+        title,
+        section,
+        period,
+        metrics,
+        labels,
+        values,
+        chart_title,
+        chart_ylabel,
+        note,
+        chart_kind,
+        chart_series,
     )
 
 
@@ -582,7 +804,12 @@ async def _corporation_dashboard(
 
 
 async def _leaders_dashboard(
-    scope: Scope, period: str, events: list[Event], title: str
+    scope: Scope,
+    period: str,
+    events: list[Event],
+    title: str,
+    zone: ZoneInfo,
+    now: int,
 ) -> Dashboard:
     scores: dict[int, int] = defaultdict(int)
     activity: Counter[int] = Counter()
@@ -635,15 +862,30 @@ async def _leaders_dashboard(
     if worst:
         key = worst[0]
         metrics.append(("Главный потерпевший", f"{names.get(key, str(key))}: {scores[key]:+d} см"))
+    labels = [names.get(key, str(key))[:18] for key in best]
+    values = [float(scores[key]) for key in best]
+    chart_kind = "bar"
+    chart_series: list[tuple[str, list[float]]] = []
+    chart_title = "Чаты по результату" if by_chat else "Игроки по результату"
+    note = ""
+    if scope.kind in {"chat", "leaderboard"}:
+        labels, chart_series = await _chat_leader_timeline(scope.chat_id, period, zone, now)
+        values = chart_series[0][1] if chart_series else []
+        chart_kind = "line"
+        chart_title = "Гонка текущих лидеров"
+        note = "Линии показывают текущую десятку чата; между событиями размер переносится без изменений."
     return Dashboard(
         title,
         "leaders",
         period,
         metrics,
-        [names.get(key, str(key))[:18] for key in best],
-        [float(scores[key]) for key in best],
-        "Чаты по результату" if by_chat else "Игроки по результату",
+        labels,
+        values,
+        chart_title,
         "см",
+        note,
+        chart_kind,
+        chart_series,
     )
 
 
@@ -688,8 +930,31 @@ def _render_sync(data: Dashboard) -> bytes:
 
     fig, ax = plt.subplots(figsize=(12.8, 7.2), dpi=100)
     if data.labels:
-        colors = ["#2e8b57" if value >= 0 else "#c94c4c" for value in data.values]
-        ax.bar(range(len(data.values)), data.values, color=colors, width=0.75)
+        if data.chart_kind == "line":
+            plotted = data.series or [(data.title, data.values)]
+            for name, values in plotted:
+                ax.plot(
+                    range(len(values)),
+                    values,
+                    marker="o",
+                    markersize=3.5,
+                    linewidth=2,
+                    drawstyle="steps-post",
+                    label=name,
+                )
+            if len(plotted) > 1:
+                ax.legend(
+                    loc="upper left",
+                    bbox_to_anchor=(1.01, 1),
+                    borderaxespad=0,
+                    frameon=False,
+                    fontsize=9,
+                )
+            ax.margins(x=0.02)
+        else:
+            colors = ["#2e8b57" if value >= 0 else "#c94c4c" for value in data.values]
+            ax.bar(range(len(data.values)), data.values, color=colors, width=0.75)
+            ax.axhline(0, color="#555555", linewidth=0.8)
         ax.set_xticks(range(len(data.labels)))
         shown = max(1, len(data.labels) // 12)
         ax.set_xticklabels(
@@ -697,7 +962,6 @@ def _render_sync(data: Dashboard) -> bytes:
             rotation=35,
             ha="right",
         )
-        ax.axhline(0, color="#555555", linewidth=0.8)
     else:
         ax.text(0.5, 0.5, "Нет данных за выбранный период", ha="center", va="center", fontsize=18)
         ax.set_xticks([])
@@ -720,8 +984,10 @@ async def render_png(data: Dashboard) -> bytes:
         tuple(data.metrics),
         tuple(data.labels),
         tuple(data.values),
+        tuple((name, tuple(values)) for name, values in data.series),
         data.chart_title,
         data.chart_ylabel,
+        data.chart_kind,
     )
     now = time.monotonic()
     cached = _png_cache.get(key)
@@ -745,7 +1011,29 @@ def render_csv(data: Dashboard) -> bytes:
     for label, value in data.metrics:
         writer.writerow([label, value])
     writer.writerow([])
-    writer.writerow(["интервал", "значение"])
-    writer.writerows(zip(data.labels, data.values, strict=True))
-    writer.writerow(["ИТОГО", sum(data.values)])
+    if data.series:
+        writer.writerow(["интервал", *(name for name, _values in data.series)])
+        for index, label in enumerate(data.labels):
+            writer.writerow(
+                [
+                    label,
+                    *(
+                        "" if math.isnan(values[index]) else values[index]
+                        for _name, values in data.series
+                    ),
+                ]
+            )
+        writer.writerow(
+            [
+                "ПОСЛЕДНЕЕ",
+                *(
+                    next((value for value in reversed(values) if not math.isnan(value)), "")
+                    for _name, values in data.series
+                ),
+            ]
+        )
+    else:
+        writer.writerow(["интервал", "значение"])
+        writer.writerows(zip(data.labels, data.values, strict=True))
+        writer.writerow(["ИТОГО", sum(data.values)])
     return ("\ufeff" + out.getvalue()).encode("utf-8")
