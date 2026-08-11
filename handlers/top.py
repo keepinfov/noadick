@@ -58,7 +58,9 @@ async def cmd_top(message: Message, bot: Bot) -> None:
         return
 
     data = await analytics.dashboard(
-        analytics.Scope("leaderboard", chat_id=chat_id), "leaders", "30"
+        analytics.Scope("leaderboard", chat_id=chat_id),
+        "leaders",
+        analytics.DEFAULT_PERIOD,
     )
     png = await analytics.render_png(data)
     await message.answer_photo(

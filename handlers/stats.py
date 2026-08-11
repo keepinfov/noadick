@@ -130,12 +130,13 @@ def _kb(code: str, scope: analytics.Scope, section: str, period: str) -> InlineK
 async def send_panel(
     message: Message, scope: analytics.Scope, code: str, section: str = "overview"
 ) -> None:
-    data = await analytics.dashboard(scope, section, "30")
+    period = analytics.DEFAULT_PERIOD
+    data = await analytics.dashboard(scope, section, period)
     png = await analytics.render_png(data)
     await message.answer_photo(
         BufferedInputFile(png, filename="stats.png"),
         caption=analytics.caption(data),
-        reply_markup=_kb(code, scope, section, "30"),
+        reply_markup=_kb(code, scope, section, period),
         parse_mode="HTML",
     )
 

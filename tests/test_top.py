@@ -17,7 +17,7 @@ async def test_top_sends_public_race_image(monkeypatch) -> None:
     data = Dashboard(
         title="Чат",
         section="leaders",
-        period="30",
+        period="7",
         metrics=[("#1", "Игрок: 100 см")],
         labels=["01.08", "02.08"],
         values=[90.0, 100.0],
@@ -36,6 +36,7 @@ async def test_top_sends_public_race_image(monkeypatch) -> None:
 
     scope = dashboard.await_args.args[0]
     assert (scope.kind, scope.chat_id) == ("leaderboard", -1007001)
+    assert dashboard.await_args.args[1:] == ("leaders", "7")
     message.answer.assert_not_awaited()
     message.answer_photo.assert_awaited_once()
     photo = message.answer_photo.await_args.args[0]

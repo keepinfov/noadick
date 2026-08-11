@@ -39,6 +39,7 @@ from services import settings, wealth
 from services.global_settings import get_config_sync
 
 PERIODS = {"d": "Сегодня", "7": "7 дней", "30": "30 дней", "a": "Всё время"}
+DEFAULT_PERIOD = "7"
 SECTIONS = {
     "overview": "Обзор",
     "growth": "Рост",
