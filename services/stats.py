@@ -13,6 +13,7 @@ from repositories import chats as C
 from repositories import events as E
 from repositories import players as P
 from services import settings as chat_settings
+from services import wealth
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 
@@ -37,6 +38,8 @@ class ProfileStats:
     name: str
     current_size: int
     rank: int
+    net_worth: int
+    net_rank: int
     plays: int
     days_played: int
     total_grown: int
@@ -57,6 +60,12 @@ class ProfileStats:
 async def compute_profile(chat_id: int, user_id: int) -> ProfileStats:
     player = await P.get_player(chat_id, user_id)
     rank = await P.get_rank(chat_id, user_id)
+    wealth_rows = await wealth.chat_rows(chat_id)
+    wealth_entry = next((row for row in wealth_rows if row.user_id == user_id), None)
+    net_rank = next(
+        (index for index, row in enumerate(wealth_rows, 1) if row.user_id == user_id),
+        len(wealth_rows) + 1,
+    )
     evs = await E.get_events(chat_id, user_id)
     tz = await chat_settings.resolve_tz(chat_id)
 
@@ -99,6 +108,8 @@ async def compute_profile(chat_id: int, user_id: int) -> ProfileStats:
         name=player.name if player else str(user_id),
         current_size=player.size if player else 0,
         rank=rank,
+        net_worth=wealth_entry.net if wealth_entry else (player.size if player else 0),
+        net_rank=net_rank,
         plays=plays,
         days_played=len(days),
         total_grown=total_grown,
@@ -123,6 +134,8 @@ class GlobalChatEntry:
     title: str
     size: int
     rank: int
+    net_worth: int
+    net_rank: int
 
 
 @dataclass
@@ -151,10 +164,28 @@ class GlobalProfileStats:
 async def compute_global_profile(user_id: int, name: str | None = None) -> GlobalProfileStats:
     sizes = await P.user_chat_sizes(user_id)
     chats: list[GlobalChatEntry] = []
+    wealth_by_chat: dict[int, list[wealth.Wealth]] = {}
+    for entry in await wealth.rows(chat_ids=[chat_id for chat_id, _title, _size in sizes]):
+        wealth_by_chat.setdefault(entry.chat_id, []).append(entry)
+    for entries in wealth_by_chat.values():
+        entries.sort(key=lambda entry: (-entry.net, entry.user_id))
     for chat_id, title, size in sizes:
         rank = await P.global_rank_for(user_id, chat_id, size)
+        wealth_rows = wealth_by_chat.get(chat_id, [])
+        wealth_entry = next((row for row in wealth_rows if row.user_id == user_id), None)
+        net_rank = next(
+            (index for index, row in enumerate(wealth_rows, 1) if row.user_id == user_id),
+            len(wealth_rows) + 1,
+        )
         chats.append(
-            GlobalChatEntry(chat_id=chat_id, title=title or str(chat_id), size=size, rank=rank)
+            GlobalChatEntry(
+                chat_id=chat_id,
+                title=title or str(chat_id),
+                size=size,
+                rank=rank,
+                net_worth=wealth_entry.net if wealth_entry else size,
+                net_rank=net_rank,
+            )
         )
 
     plays, grown, lost, best, worst = await E.global_dick_aggregate(user_id)

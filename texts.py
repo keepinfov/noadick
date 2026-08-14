@@ -141,7 +141,11 @@ def profile_header(name: str) -> str:
 
 
 def profile_size(size: int, rank: int) -> str:
-    return f"Размер: {size} см ({rank} место в топе)"
+    return f"Длина: {size} см ({rank} место по длине)"
+
+
+def profile_wealth(value: int, rank: int) -> str:
+    return f"Состояние: {value} см ({rank} место по состоянию)"
 
 
 def profile_plays(plays: int, days: int) -> str:
@@ -198,8 +202,8 @@ GLOBAL_CHATS_HEADER = "Чаты:"
 GLOBAL_NO_CHATS = "Пока ни в одном чате нет накоплений."
 
 
-def global_chat_line(title: str, size: int, rank: int) -> str:
-    return f"• {title}: {size} см ({rank} место)"
+def global_chat_line(title: str, size: int, rank: int, net_worth: int, net_rank: int) -> str:
+    return f"• {title}: длина {size} см (#{rank}), состояние {net_worth} см (#{net_rank})"
 
 
 def global_plays(plays: int, grown: int, lost: int) -> str:
@@ -254,7 +258,7 @@ HELP = (
     "/poker — ПИСЮН-HOLDEM на сантиметры\n"
     "/me — твой профиль и статистика\n"
     "/stats — подробная статистика, графики и CSV в личке\n"
-    "/top — топ-10 по размеру\n"
+    "/top — топ-10 по чистому состоянию и недельная гонка\n"
     "/bank — вклады, кредиты и текущий баланс\n"
     "/corp — состояние Корпорации\n"
     "/ping — ping-pong\n"

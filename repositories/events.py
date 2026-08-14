@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from sqlalchemy import case, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.engine import get_session_factory
 from db.models import Event
@@ -41,6 +42,31 @@ CORP_BAILIN = "corp_bailin"
 PISYAGO = "pisyago"
 
 
+def add_event(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+    etype: str,
+    *,
+    delta: int = 0,
+    size_after: int = 0,
+    meta: dict | None = None,
+    created_at: int | None = None,
+) -> Event:
+    """Append an event to the caller's transaction without committing it."""
+    event = Event(
+        chat_id=chat_id,
+        user_id=user_id,
+        type=etype,
+        delta=delta,
+        size_after=size_after,
+        meta=meta,
+        created_at=created_at if created_at is not None else int(time.time()),
+    )
+    session.add(event)
+    return event
+
+
 async def log_event(
     chat_id: int,
     user_id: int,
@@ -53,16 +79,15 @@ async def log_event(
 ) -> None:
     factory = get_session_factory()
     async with factory() as session:
-        session.add(
-            Event(
-                chat_id=chat_id,
-                user_id=user_id,
-                type=etype,
-                delta=delta,
-                size_after=size_after,
-                meta=meta,
-                created_at=created_at if created_at is not None else int(time.time()),
-            )
+        add_event(
+            session,
+            chat_id,
+            user_id,
+            etype,
+            delta=delta,
+            size_after=size_after,
+            meta=meta,
+            created_at=created_at,
         )
         await session.commit()
 

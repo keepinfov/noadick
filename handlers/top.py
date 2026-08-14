@@ -15,18 +15,22 @@ from services import analytics
 from services.global_settings import get_config_sync
 
 router = Router()
+_bot_username: str | None = None
 
 
 async def _details_keyboard(bot: Bot, chat_id: int) -> InlineKeyboardMarkup | None:
-    me = await bot.me()
-    if not me.username:
+    global _bot_username
+    if _bot_username is None:
+        me = await bot.me()
+        _bot_username = me.username or ""
+    if not _bot_username:
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="📊 Подробнее в ЛС",
-                    url=f"https://t.me/{me.username}?start=stats_l_{chat_id}_0",
+                    url=f"https://t.me/{_bot_username}?start=stats_l_{chat_id}_0",
                 )
             ]
         ]

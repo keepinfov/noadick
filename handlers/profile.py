@@ -53,7 +53,11 @@ def format_global_profile(stats: S.GlobalProfileStats) -> str:
     lines.append(texts.GLOBAL_CHATS_HEADER)
     if stats.chats:
         for c in stats.chats:
-            lines.append(texts.global_chat_line(html.escape(c.title), c.size, c.rank))
+            lines.append(
+                texts.global_chat_line(
+                    html.escape(c.title), c.size, c.rank, c.net_worth, c.net_rank
+                )
+            )
     else:
         lines.append(texts.GLOBAL_NO_CHATS)
 
@@ -118,6 +122,7 @@ async def cmd_me(message: Message, bot: Bot) -> None:
     lines = [
         texts.profile_header(name),
         texts.profile_size(profile.current_size, profile.rank),
+        texts.profile_wealth(profile.net_worth, profile.net_rank),
         "",
         texts.profile_plays(profile.plays, profile.days_played),
         texts.profile_growth(profile.total_grown, profile.total_lost),

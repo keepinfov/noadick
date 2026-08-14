@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+import weakref
 from dataclasses import dataclass
 
 from db.models import PokerHand, PokerSeat, PokerTable
@@ -30,7 +31,7 @@ PRESETS: dict[str, tuple[int, int, int]] = {
     "deep": (100, 1, 2),
 }
 
-_locks: dict[str, asyncio.Lock] = {}
+_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def table_lock(table_id: str) -> asyncio.Lock:

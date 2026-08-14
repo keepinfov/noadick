@@ -10,6 +10,7 @@ import asyncio
 import csv
 import html
 import io
+import logging
 import math
 import os
 import time
@@ -21,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, select
 
-from db.engine import get_session_factory
+from db.engine import get_engine, get_session_factory
 from db.models import (
     AnalyticsState,
     Chat,
@@ -37,6 +38,8 @@ from db.models import (
 from repositories import events as E
 from services import settings, wealth
 from services.global_settings import get_config_sync
+
+logger = logging.getLogger(__name__)
 
 PERIODS = {"d": "Сегодня", "7": "7 дней", "30": "30 дней", "a": "Всё время"}
 DEFAULT_PERIOD = "7"
@@ -55,6 +58,10 @@ _render_slots = asyncio.Semaphore(2)
 _png_cache: dict[tuple, tuple[float, bytes]] = {}
 _PNG_CACHE_TTL = 120
 _PNG_CACHE_MAX = 32
+_dashboard_cache: dict[tuple[int, Scope, str, str], tuple[float, Dashboard]] = {}
+_dashboard_flights: dict[tuple[int, Scope, str, str], asyncio.Lock] = {}
+_DASHBOARD_CACHE_TTL = 30
+_DASHBOARD_CACHE_MAX = 64
 
 
 @dataclass(frozen=True)
@@ -391,17 +398,21 @@ def _wealth_timeline(
     ordered_events = sorted(events, key=lambda event: (event.created_at, event.id))
     times = _period_times(ordered_events, period, since, now, zone)
     values = {entity_id: [] for entity_id in entity_ids}
-    for timestamp in times:
+    running = dict(current)
+    event_index = len(ordered_events) - 1
+    for timestamp in reversed(times):
+        while event_index >= 0 and ordered_events[event_index].created_at > timestamp:
+            event = ordered_events[event_index]
+            key = int(entity_key(event))
+            if key in running:
+                running[key] -= _wealth_delta(event)
+            event_index -= 1
         for entity_id in entity_ids:
-            if entity_id not in current:
-                values[entity_id].append(math.nan)
-                continue
-            future_delta = sum(
-                _wealth_delta(event)
-                for event in ordered_events
-                if event.created_at > timestamp and int(entity_key(event)) == entity_id
+            values[entity_id].append(
+                float(running[entity_id]) if entity_id in running else math.nan
             )
-            values[entity_id].append(float(current[entity_id] - future_delta))
+    for entity_values in values.values():
+        entity_values.reverse()
     return _line_labels(times, period, zone), [
         (names.get(entity_id, str(entity_id))[:24], values[entity_id]) for entity_id in entity_ids
     ]
@@ -422,6 +433,9 @@ async def _growth_timeline(
             Event.user_id == scope.user_id,
             Event.created_at <= now,
         )
+        since = _since(period, zone, now)
+        if since is not None:
+            event_stmt = event_stmt.where(Event.created_at >= since)
         if scope.kind == "user":
             event_stmt = event_stmt.where(Event.chat_id == scope.chat_id)
         events = list((await session.execute(event_stmt.order_by(Event.created_at))).scalars())
@@ -471,6 +485,9 @@ async def _aggregate_growth_timeline(
             Event.created_at <= now,
             Event.user_id != 0,
         )
+        since = _since(period, zone, now)
+        if since is not None:
+            event_stmt = event_stmt.where(Event.created_at >= since)
         if scope.kind == "chat":
             event_stmt = event_stmt.where(Event.chat_id == scope.chat_id)
         events = list(
@@ -484,32 +501,41 @@ async def _aggregate_growth_timeline(
         key = (int(event.chat_id), int(event.user_id))
         if event.type in SIZE_EVENT_TYPES and key not in persisted:
             current[key] = float(event.size_after)
-    values: list[float] = []
-    for timestamp in times:
-        future_delta = sum(_wealth_delta(event) for event in events if event.created_at > timestamp)
-        values.append(sum(current.values()) - future_delta)
+    running = float(sum(current.values()))
+    values_reversed: list[float] = []
+    event_index = len(events) - 1
+    for timestamp in reversed(times):
+        while event_index >= 0 and events[event_index].created_at > timestamp:
+            running -= _wealth_delta(events[event_index])
+            event_index -= 1
+        values_reversed.append(running)
+    values = list(reversed(values_reversed))
     return _line_labels(times, period, zone), [("Общее чистое состояние", values)]
 
 
 async def _chat_leader_timeline(
-    chat_id: int, period: str, zone: ZoneInfo, now: int
+    chat_id: int,
+    period: str,
+    zone: ZoneInfo,
+    now: int,
+    leaders: list[wealth.Wealth] | None = None,
 ) -> tuple[list[str], list[tuple[str, list[float]]]]:
-    leaders = (await wealth.chat_rows(chat_id))[:10]
+    leaders = (await wealth.chat_rows(chat_id))[:10] if leaders is None else leaders[:10]
     user_ids = [player.user_id for player in leaders]
     factory = get_session_factory()
     async with factory() as session:
+        since = _since(period, zone, now)
+        filters = [
+            Event.chat_id == chat_id,
+            Event.user_id.in_(user_ids),
+            Event.created_at <= now,
+        ]
+        if since is not None:
+            filters.append(Event.created_at >= since)
         events = (
             list(
                 (
-                    await session.execute(
-                        select(Event)
-                        .where(
-                            Event.chat_id == chat_id,
-                            Event.user_id.in_(user_ids),
-                            Event.created_at <= now,
-                        )
-                        .order_by(Event.created_at)
-                    )
+                    await session.execute(select(Event).where(*filters).order_by(Event.created_at))
                 ).scalars()
             )
             if user_ids
@@ -534,17 +560,19 @@ async def _chat_leader_timeline(
     )
 
 
-async def dashboard(
+async def _dashboard_uncached(
     scope: Scope, section: str, period: str, *, now: int | None = None
 ) -> Dashboard:
     if section not in SECTIONS or period not in PERIODS:
         raise ValueError("unknown dashboard page")
     now = int(time.time()) if now is None else now
     zone = await _zone(scope)
-    events = await _events(scope, period, zone, now)
-    snap = await _snapshot(scope)
     title = await _title(scope)
-    watermark = await detailed_since()
+    if section == "corp":
+        return await _corporation_dashboard(scope, period, zone, now, title)
+    events = await _events(scope, period, zone, now)
+    snap = await _snapshot(scope) if section in {"overview", "bank"} else {}
+    watermark = await detailed_since() if section in {"bank", "poker"} else 0
     metrics: list[tuple[str, str]] = []
     chart_title = "Активность"
     chart_ylabel = "события"
@@ -762,7 +790,7 @@ async def dashboard(
     elif section == "leaders":
         return await _leaders_dashboard(scope, period, events, title, zone, now)
     else:
-        return await _corporation_dashboard(scope, period, zone, now, title)
+        raise ValueError("unknown dashboard page")
 
     if section != "growth":
         labels, values = _series(relevant, period, zone, value_fn)
@@ -906,7 +934,9 @@ async def _leaders_dashboard(
     chart_title = "Чистое состояние чатов" if by_chat else "Чистое состояние игроков"
     note = ""
     if scope.kind in {"chat", "leaderboard"}:
-        labels, chart_series = await _chat_leader_timeline(scope.chat_id, period, zone, now)
+        labels, chart_series = await _chat_leader_timeline(
+            scope.chat_id, period, zone, now, wealth_rows
+        )
         values = chart_series[0][1] if chart_series else []
         chart_kind = "line"
         chart_title = "Гонка текущих лидеров"
@@ -924,6 +954,41 @@ async def _leaders_dashboard(
         chart_kind,
         chart_series,
     )
+
+
+async def dashboard(
+    scope: Scope, section: str, period: str, *, now: int | None = None
+) -> Dashboard:
+    """Build a dashboard with a short, bounded cache and request coalescing."""
+    if now is not None:
+        return await _dashboard_uncached(scope, section, period, now=now)
+    key = (id(get_engine()), scope, section, period)
+    monotonic_now = time.monotonic()
+    cached = _dashboard_cache.get(key)
+    if cached is not None and monotonic_now - cached[0] <= _DASHBOARD_CACHE_TTL:
+        return cached[1]
+    flight = _dashboard_flights.setdefault(key, asyncio.Lock())
+    async with flight:
+        cached = _dashboard_cache.get(key)
+        monotonic_now = time.monotonic()
+        if cached is not None and monotonic_now - cached[0] <= _DASHBOARD_CACHE_TTL:
+            return cached[1]
+        started = time.monotonic()
+        data = await _dashboard_uncached(scope, section, period)
+        logger.info(
+            "Analytics dashboard built scope=%s section=%s period=%s metrics=%d duration_ms=%d",
+            scope.kind,
+            section,
+            period,
+            sum(1 for _label, value in data.metrics if value),
+            round((time.monotonic() - started) * 1000),
+        )
+        if len(_dashboard_cache) >= _DASHBOARD_CACHE_MAX:
+            oldest = min(_dashboard_cache, key=lambda item: _dashboard_cache[item][0])
+            _dashboard_cache.pop(oldest, None)
+            _dashboard_flights.pop(oldest, None)
+        _dashboard_cache[key] = (monotonic_now, data)
+        return data
 
 
 async def detailed_since() -> int:

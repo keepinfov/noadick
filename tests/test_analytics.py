@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from types import SimpleNamespace
@@ -71,6 +72,29 @@ async def test_growth_dashboard_png_and_csv(db) -> None:
     assert "раздел;Рост" in csv_data
     assert "интервал;Чистое состояние" in csv_data
     assert "ПОСЛЕДНЕЕ;13.0" in csv_data
+
+
+async def test_dashboard_coalesces_identical_concurrent_requests(db, monkeypatch) -> None:
+    from services import analytics
+
+    analytics._dashboard_cache.clear()
+    analytics._dashboard_flights.clear()
+    calls = 0
+
+    async def build(scope, section, period, *, now=None):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return analytics.Dashboard("Чат", section, period, [], [], [], "Тест")
+
+    monkeypatch.setattr(analytics, "_dashboard_uncached", build)
+    scope = analytics.Scope("leaderboard", chat_id=-7001)
+    first, second = await asyncio.gather(
+        analytics.dashboard(scope, "leaders", "7"),
+        analytics.dashboard(scope, "leaders", "7"),
+    )
+    assert calls == 1
+    assert first is second
 
 
 async def test_chat_leaders_are_combined_into_overtake_chart(db) -> None:

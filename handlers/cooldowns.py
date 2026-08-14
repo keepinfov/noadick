@@ -42,7 +42,7 @@ async def _send_notice(message: Message) -> Message | None:
     try:
         return await message.reply(texts.COOLDOWN_NOTICE)
     except TelegramAPIError:
-        return None
+        pass
     with contextlib.suppress(TelegramAPIError):
         return await message.answer(texts.COOLDOWN_NOTICE)
     return None

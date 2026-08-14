@@ -201,6 +201,9 @@ async def create_table_with_host(
             last_event="Стол открыт. Мораль закрыта.",
         )
         session.add(table)
+        # No ORM relationship is declared between the write models, therefore
+        # make the FK parent visible before inserting its first seat.
+        await session.flush()
         session.add(
             PokerSeat(
                 table_id=table_id,

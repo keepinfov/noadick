@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import time
+import weakref
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.engine import get_session_factory
 from db.models import Chat, Player
 
 # Per-chat locks serialize read-modify-write cycles so concurrent updates
 # (game handlers + admin actions) in the same chat cannot lose writes.
-_locks: dict[int, asyncio.Lock] = {}
+_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def get_chat_lock(chat_id: int) -> asyncio.Lock:
@@ -101,6 +103,20 @@ async def get_player(chat_id: int, user_id: int) -> Player | None:
     factory = get_session_factory()
     async with factory() as session:
         return await session.get(Player, (chat_id, user_id))
+
+
+async def get_player_in(session: AsyncSession, chat_id: int, user_id: int) -> Player | None:
+    return await session.get(Player, (chat_id, user_id))
+
+
+async def ensure_player_in(session: AsyncSession, chat_id: int, user_id: int) -> Player:
+    await ensure_chat(session, chat_id)
+    player = await session.get(Player, (chat_id, user_id))
+    if player is None:
+        player = Player(chat_id=chat_id, user_id=user_id, name=str(user_id))
+        session.add(player)
+        await session.flush()
+    return player
 
 
 async def list_players(chat_id: int) -> list[Player]:

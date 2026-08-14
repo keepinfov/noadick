@@ -110,6 +110,7 @@ class ChatCorporation(Base):
     for published rule URLs and an auditable migration source."""
 
     __tablename__ = "chat_corporations"
+    __table_args__ = (Index("ix_chat_corporations_status", "status"),)
 
     chat_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), primary_key=True
@@ -166,7 +167,7 @@ class AnalyticsState(Base):
 
 class Deposit(Base):
     """One active deposit per (chat, user). Opening moves size out of the
-    player (freezing it: hidden from /top, unusable in duels, no /dick growth);
+    player (freezing it: counted in net worth, unusable in duels, no /dick growth);
     withdrawing returns principal + accrued − early-withdrawal penalty."""
 
     __tablename__ = "deposits"
@@ -198,6 +199,9 @@ class DepositInsurance(Base):
     centimetre later cannot renew older coverage for free."""
 
     __tablename__ = "deposit_insurance"
+    __table_args__ = (
+        Index("ix_deposit_insurance_owner_expiry", "chat_id", "user_id", "expires_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -214,6 +218,7 @@ class Loan(Base):
     default and is recovered via /dick and duel garnishment."""
 
     __tablename__ = "loans"
+    __table_args__ = (Index("ix_loans_default_due", "defaulted", "due_at"),)
 
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)

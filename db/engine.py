@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -27,6 +28,21 @@ def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         _engine = create_async_engine(_db_url(), echo=False)
+
+        @event.listens_for(_engine.sync_engine, "connect")
+        def _configure_sqlite(dbapi_connection, _connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.close()
+
+        @event.listens_for(_engine.sync_engine, "begin")
+        def _defer_sqlite_foreign_keys(connection) -> None:
+            # ORM flush order does not require relationship objects everywhere;
+            # validate cross-row references at commit after all rows exist.
+            connection.exec_driver_sql("PRAGMA defer_foreign_keys=ON")
+
     return _engine
 
 

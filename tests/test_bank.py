@@ -184,6 +184,49 @@ async def test_open_deposit_moves_size(db):
     assert dep.principal == 40
 
 
+async def test_open_deposit_rolls_back_every_accounting_leg(db, monkeypatch):
+    from sqlalchemy import func, select
+
+    from db.engine import get_session_factory
+    from db.models import CorporationLedger
+    from repositories import bank as repo
+    from repositories import events as events_repo
+    from repositories import players as players_repo
+    from services import bank
+
+    await _seed_player(100)
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("injected event failure")
+
+    monkeypatch.setattr(events_repo, "add_event", explode)
+    with pytest.raises(RuntimeError, match="injected"):
+        await bank.open_deposit(CHAT, USER, 40)
+
+    assert (await players_repo.get_player(CHAT, USER)).size == 100
+    assert await repo.get_deposit(CHAT, USER) is None
+    assert (await repo.get_corp(CHAT)).balance == 0
+    factory = get_session_factory()
+    async with factory() as session:
+        count = await session.scalar(select(func.count(CorporationLedger.id)))
+    assert count == 0
+
+
+async def test_sqlite_runtime_safety_pragmas_are_enabled(db):
+    from sqlalchemy import text
+
+    from db.engine import get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as session:
+        foreign_keys = await session.scalar(text("PRAGMA foreign_keys"))
+        busy_timeout = await session.scalar(text("PRAGMA busy_timeout"))
+        journal_mode = await session.scalar(text("PRAGMA journal_mode"))
+    assert foreign_keys == 1
+    assert busy_timeout == 5000
+    assert str(journal_mode).lower() == "wal"
+
+
 async def test_open_deposit_no_size(db):
     from services import bank
 

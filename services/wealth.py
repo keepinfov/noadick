@@ -23,7 +23,12 @@ class Wealth:
         return self.liquid + self.deposits + self.poker - self.debt
 
 
-async def rows(*, chat_id: int | None = None, user_id: int | None = None) -> list[Wealth]:
+async def rows(
+    *,
+    chat_id: int | None = None,
+    chat_ids: list[int] | None = None,
+    user_id: int | None = None,
+) -> list[Wealth]:
     factory = get_session_factory()
     async with factory() as session:
         player_stmt = select(Player)
@@ -39,6 +44,11 @@ async def rows(*, chat_id: int | None = None, user_id: int | None = None) -> lis
             deposit_stmt = deposit_stmt.where(Deposit.chat_id == chat_id)
             loan_stmt = loan_stmt.where(Loan.chat_id == chat_id)
             poker_stmt = poker_stmt.where(PokerTable.chat_id == chat_id)
+        elif chat_ids is not None:
+            player_stmt = player_stmt.where(Player.chat_id.in_(chat_ids))
+            deposit_stmt = deposit_stmt.where(Deposit.chat_id.in_(chat_ids))
+            loan_stmt = loan_stmt.where(Loan.chat_id.in_(chat_ids))
+            poker_stmt = poker_stmt.where(PokerTable.chat_id.in_(chat_ids))
         if user_id is not None:
             player_stmt = player_stmt.where(Player.user_id == user_id)
             deposit_stmt = deposit_stmt.where(Deposit.user_id == user_id)
