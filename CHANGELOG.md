@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+## [0.1.0] - 2026-08-16
+
+### Added
+
+- Telegram group game with daily `/dick` rolls, duels, no-limit Hold'em,
+  profiles, leaderboards, diseases, and administrative controls.
+- Chat-local closed economies with corporations, deposits, loans, PISYAGO,
+  deposit insurance, debt collection, and auditable economy events.
+- Private analytics with PNG charts and CSV exports, plus public weekly races.
 - Weekly, chat-local, statistics-only seasons with archived snapshots, a public
   `/season` panel, charts, and optional scheduled posts. Seasons grant no
   economy rewards.
