@@ -172,7 +172,7 @@ def caption(report: seasons.SeasonReport, *, full: bool = False, page: int = 0) 
     lines.extend(
         [
             "",
-            f"📏 Инфляция сантиметра: <b>{_pct(report.length_delta, report.length_start)}</b>",
+            f"📏 Изменение общей длины: <b>{_pct(report.length_delta, report.length_start)}</b>",
             f"💼 Состояние чата: <b>{_pct(report.wealth_delta, report.wealth_start)}</b>",
             f"🏢 Эмиссия Корпорации: <b>{report.emission} см</b>",
             f"🎲 Бросков: <b>{total_rolls}</b>",

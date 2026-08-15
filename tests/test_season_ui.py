@@ -87,7 +87,9 @@ def test_season_caption_is_safe_bounded_and_handles_empty() -> None:
 
     assert "&lt;Вася&gt;" in value
     assert "<Вася>" not in value
-    assert "Инфляция сантиметра" in value
+    assert "Изменение общей длины" in value
+    assert "Инфляция" not in value
+    assert "Эмиссия Корпорации: <b>3 см</b>" in value
     assert len(value) <= 1024
     assert "Пустая неделя" in empty
 
