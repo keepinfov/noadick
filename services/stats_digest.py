@@ -1,70 +1,95 @@
+"""Finalize weekly seasons and publish configured chat-local reports."""
+
 from __future__ import annotations
 
 import asyncio
-import html
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
-from repositories import chat_settings as settings_repo
+from presentation import seasons as season_view
+from repositories import chats as chats_repo
 from repositories import threads as threads_repo
-from services import analytics
+from services import season_chart, seasons, settings
 
 logger = logging.getLogger(__name__)
 
 
-async def run_once(bot: Bot) -> int:
+def _zone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("Europe/Moscow")
+
+
+def _publication_due(
+    report: seasons.SeasonReport,
+    *,
+    now: int,
+    weekday: int,
+    hour: int,
+) -> bool:
+    zone = _zone(report.timezone)
+    closed = datetime.fromtimestamp(report.ends_at, zone)
+    scheduled = (closed + timedelta(days=(weekday - closed.weekday()) % 7)).replace(
+        hour=hour, minute=0, second=0, microsecond=0
+    )
+    return datetime.fromtimestamp(now, zone) >= scheduled
+
+
+async def _run_chat(bot: Bot, chat_id: int, *, now: int) -> int:
+    effective = await settings.get_effective(chat_id)
+    await seasons.finalize_due(chat_id, now=now, timezone=effective.tz)
+
+    pending = await seasons.pending_reports(chat_id)
+    if len(pending) > 1:
+        await seasons.skip_publication(
+            chat_id, tuple(report.season_number for report in pending[1:])
+        )
+    if not pending or not effective.stats_digest_enabled:
+        return 0
+
+    newest = pending[0]
+    if not _publication_due(
+        newest,
+        now=now,
+        weekday=effective.stats_digest_weekday,
+        hour=effective.stats_digest_hour,
+    ):
+        return 0
+
+    png = await season_chart.render_png(newest)
+    thread_id, reason = await threads_repo.resolve_thread(chat_id)
+    if reason != "explicit":
+        thread_id = None
+    sent = await bot.send_photo(
+        chat_id,
+        BufferedInputFile(png, filename=f"season-{newest.season_number}.png"),
+        caption=season_view.caption(newest),
+        message_thread_id=thread_id,
+        parse_mode="HTML",
+    )
+    marked = await seasons.mark_published(
+        chat_id,
+        newest.season_number,
+        message_id=int(sent.message_id),
+        published_at=now,
+    )
+    return int(marked)
+
+
+async def run_once(bot: Bot, *, now: int | None = None) -> int:
     sent = 0
-    for row in await settings_repo.enabled_digests():
+    timestamp = int(time.time()) if now is None else now
+    for chat_id in await chats_repo.chat_ids_by_mode("groups"):
         try:
-            zone = ZoneInfo(row.tz or "Europe/Moscow")
-        except ZoneInfoNotFoundError:
-            zone = ZoneInfo("Europe/Moscow")
-        now = datetime.now(zone)
-        iso = now.isocalendar()
-        week_key = f"{iso.year}-W{iso.week:02d}"
-        if (
-            now.weekday() != int(row.stats_digest_weekday)
-            or now.hour < int(row.stats_digest_hour)
-            or row.stats_digest_last_week == week_key
-        ):
-            continue
-        try:
-            data = await analytics.dashboard(
-                analytics.Scope("chat", chat_id=row.chat_id), "overview", "7"
-            )
-            leaders = await analytics.dashboard(
-                analytics.Scope("chat", chat_id=row.chat_id), "leaders", "7"
-            )
-            png = await analytics.render_png(data)
-            thread_id, thread_reason = await threads_repo.resolve_thread(row.chat_id)
-            if thread_reason != "explicit":
-                thread_id = None
-            podium = [
-                f"• {html.escape(label)}: <b>{html.escape(value)}</b>"
-                for label, value in leaders.metrics
-                if label.startswith("#")
-            ]
-            digest_caption = "📊 <b>Недельный отчёт</b>\n\n" + analytics.caption(data)
-            if podium:
-                podium_text = "\n\n🏆 <b>Лучшие за неделю</b>\n" + "\n".join(podium)
-                if len(digest_caption + podium_text) <= 1024:
-                    digest_caption += podium_text
-            await bot.send_photo(
-                row.chat_id,
-                BufferedInputFile(png, filename="weekly-stats.png"),
-                caption=digest_caption,
-                message_thread_id=thread_id,
-                parse_mode="HTML",
-            )
+            sent += await _run_chat(bot, chat_id, now=timestamp)
         except Exception:
-            logger.exception("Could not send weekly stats digest", extra={"chat_id": row.chat_id})
-            continue
-        await settings_repo.mark_digest_sent(row.chat_id, week_key)
-        sent += 1
+            logger.exception("Could not process weekly season", extra={"chat_id": chat_id})
     return sent
 
 
@@ -73,5 +98,5 @@ async def loop(bot: Bot) -> None:
         try:
             await run_once(bot)
         except Exception:
-            logger.exception("Weekly stats scheduler pass failed")
+            logger.exception("Weekly season scheduler pass failed")
         await asyncio.sleep(60)

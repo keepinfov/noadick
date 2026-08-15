@@ -286,23 +286,20 @@ async def test_dashboard_authorization_is_fail_closed(monkeypatch: pytest.Monkey
     assert not await stats_handler._allowed(bot, 72, public_scope)
 
 
-async def test_weekly_digest_is_not_duplicated(db, monkeypatch: pytest.MonkeyPatch) -> None:
-    from datetime import UTC, datetime
-
+async def test_weekly_scheduler_ignores_unregistered_settings(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from repositories import chat_settings
     from services import stats_digest
 
-    now = datetime.now(UTC)
     await chat_settings.upsert_settings(
         -7001,
         tz="UTC",
         stats_digest_enabled=True,
-        stats_digest_weekday=now.weekday(),
-        stats_digest_hour=now.hour,
+        stats_digest_weekday=0,
+        stats_digest_hour=0,
     )
-    monkeypatch.setattr(stats_digest.analytics, "render_png", AsyncMock(return_value=b"png"))
     bot = AsyncMock()
 
-    assert await stats_digest.run_once(bot) == 1
     assert await stats_digest.run_once(bot) == 0
-    assert bot.send_photo.await_count == 1
+    bot.send_photo.assert_not_awaited()

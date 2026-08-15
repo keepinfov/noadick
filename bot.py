@@ -19,6 +19,7 @@ from handlers import (
     ping,
     poker,
     profile,
+    season,
     settings,
     stats,
     top,
@@ -86,6 +87,7 @@ async def main() -> None:
         profile.router,
         stats.router,
         top.router,
+        season.router,
         help.router,
         ping.router,
     )
@@ -98,6 +100,7 @@ async def main() -> None:
             BotCommand(command="me", description="Твой профиль и статистика"),
             BotCommand(command="stats", description="Подробная статистика и графики"),
             BotCommand(command="top", description="Топ-10 по размеру"),
+            BotCommand(command="season", description="Итоги недельного сезона"),
             BotCommand(command="bank", description="Банк: вклады и кредиты"),
             BotCommand(command="corp", description="Счёт Корпорации"),
             BotCommand(command="settings", description="Настройки чата (админам)"),

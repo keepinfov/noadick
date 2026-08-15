@@ -26,3 +26,16 @@ class StatsCallback(CallbackData, prefix="stx"):
     period: str
     chat_id: int = 0
     user_id: int = 0
+
+
+class SeasonCallback(CallbackData, prefix="sea"):
+    """Compact public season-panel action.
+
+    Actions: s=summary, f=full table, p/n=archive navigation,
+    r=refresh the current live season.
+    """
+
+    action: str
+    chat_id: int
+    season_no: int
+    owner_id: int

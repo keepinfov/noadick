@@ -259,6 +259,7 @@ HELP = (
     "/me — твой профиль и статистика\n"
     "/stats — подробная статистика, графики и CSV в личке\n"
     "/top — топ-10 по чистому состоянию и недельная гонка\n"
+    "/season — предварительные итоги и архив недельных сезонов\n"
     "/bank — вклады, кредиты и текущий баланс\n"
     "/corp — состояние Корпорации\n"
     "/ping — ping-pong\n"
@@ -703,7 +704,7 @@ def settings_screen(
         f"• Покер: {poker_off}\n"
         f"• Ставка дуэли: {stake}\n"
         f"• Таймаут дуэли: {timeout} сек\n"
-        f"• Недельный дайджест: {digest_off}, {weekdays[digest_weekday]} {digest_hour:02d}:00"
+        f"• Недельные сезоны: {digest_off}, {weekdays[digest_weekday]} {digest_hour:02d}:00"
     )
 
 
@@ -732,7 +733,7 @@ def settings_btn_tz(tz: str) -> str:
 
 
 def settings_btn_digest(enabled: bool) -> str:
-    return f"📊 Недельный дайджест: {'✅' if enabled else '❌'}"
+    return f"🍆 Недельные сезоны: {'✅' if enabled else '❌'}"
 
 
 # --------------------------------------------------------------------- poker ---

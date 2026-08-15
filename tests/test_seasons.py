@@ -89,6 +89,28 @@ async def test_installation_week_is_partial_and_first_full_week_is_one(db) -> No
     assert await seasons.list_reports(chat_id) == ()
 
 
+async def test_timezone_change_uses_first_new_local_monday_without_overlap(db) -> None:
+    from repositories import players
+    from services import seasons, settings
+
+    chat_id = -8199
+    installed = ts("2026-08-12T12:00:00")
+    await players.set_player_fields(chat_id, 99, name="Путешественник", size=10)
+    await settings.set_setting(chat_id, "tz", "UTC")
+    await seasons.ensure_live(chat_id, now=installed, timezone="UTC", installed_at=installed)
+    await seasons.finalize_due(chat_id, now=ts("2026-08-17T00:00:00"))
+    await settings.set_setting(chat_id, "tz", "Asia/Tokyo")
+
+    (closed,) = await seasons.finalize_due(chat_id, now=ts("2026-08-24T00:00:00"))
+    live = await seasons.get_live_report(chat_id, now=ts("2026-08-24T00:00:01"))
+
+    assert live is not None
+    assert live.starts_at == closed.ends_at
+    assert datetime.fromtimestamp(live.ends_at, ZoneInfo("Asia/Tokyo")).isoformat() == (
+        "2026-08-31T00:00:00+09:00"
+    )
+
+
 async def test_partial_live_report_ignores_preinstallation_events(db) -> None:
     from repositories import events, players
     from services import seasons

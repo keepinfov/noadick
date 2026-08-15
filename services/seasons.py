@@ -144,7 +144,13 @@ def week_bounds(timestamp: int, zone: ZoneInfo) -> tuple[int, int]:
 
 
 def _next_end(starts_at: int, zone: ZoneInfo) -> int:
-    return int((datetime.fromtimestamp(starts_at, zone) + timedelta(days=7)).timestamp())
+    local = datetime.fromtimestamp(starts_at, zone)
+    boundary = (local - timedelta(days=local.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    if boundary <= local:
+        boundary += timedelta(days=7)
+    return int(boundary.timestamp())
 
 
 def competitive_wealth_delta(event: Event) -> int:
@@ -614,6 +620,14 @@ async def list_reports(
     return tuple(
         _report(season) for season in await repo.list_finalized(chat_id, offset=offset, limit=limit)
     )
+
+
+async def pending_reports(chat_id: int) -> tuple[SeasonReport, ...]:
+    return tuple(_report(season) for season in await repo.list_pending(chat_id))
+
+
+async def skip_publication(chat_id: int, season_numbers: tuple[int, ...]) -> int:
+    return await repo.mark_skipped(chat_id, season_numbers)
 
 
 async def mark_published(

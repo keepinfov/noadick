@@ -108,6 +108,53 @@ async def list_finalized(chat_id: int, *, offset: int = 0, limit: int = 20) -> l
         return list(rows)
 
 
+async def list_pending(chat_id: int) -> list[WeeklySeason]:
+    factory = get_session_factory()
+    async with factory() as session:
+        return list(
+            (
+                await session.execute(
+                    select(WeeklySeason)
+                    .options(_with_players())
+                    .where(
+                        WeeklySeason.chat_id == chat_id,
+                        WeeklySeason.status == "finalized",
+                        WeeklySeason.is_empty.is_(False),
+                        WeeklySeason.publication_status == "pending",
+                    )
+                    .order_by(WeeklySeason.season_number.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+async def mark_skipped(chat_id: int, season_numbers: Iterable[int]) -> int:
+    numbers = tuple(season_numbers)
+    if not numbers:
+        return 0
+    factory = get_session_factory()
+    async with factory() as session, session.begin():
+        rows = list(
+            (
+                await session.execute(
+                    select(WeeklySeason).where(
+                        WeeklySeason.chat_id == chat_id,
+                        WeeklySeason.season_number.in_(numbers),
+                        WeeklySeason.status == "finalized",
+                        WeeklySeason.publication_status == "pending",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            row.publication_status = "skipped"
+        return len(rows)
+
+
 async def next_number_in(session: AsyncSession, chat_id: int) -> int:
     value = await session.scalar(
         select(func.coalesce(func.max(WeeklySeason.season_number), 0)).where(
