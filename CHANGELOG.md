@@ -10,10 +10,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+### Security
+
+## [0.1.1] - 2026-08-16
+
+### Fixed
+
 - Weekly season cards distinguish total player-length change from Corporation
   emission instead of calling both effects inflation.
-
-### Security
 
 ## [0.1.0] - 2026-08-16
 
