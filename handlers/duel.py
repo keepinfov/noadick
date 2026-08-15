@@ -20,18 +20,13 @@ from models.disease import (
     disease_tag,
     try_infect,
 )
+from presentation import public
 from repositories import events as E
 from repositories.players import get_chat_lock, get_storage, save_storage
 from services import bank, cooldown
 from services.global_settings import get_config_sync
 from services.settings import get_effective
-from texts import (
-    CORP_LINES,
-    REACTION_TIERS,
-    STEAL_LINES,
-    TECHNIQUE_LINES,
-    VICTORY_LINES,
-)
+from texts import REACTION_TIERS
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -47,7 +42,7 @@ def _mention(user_id: int, name: str) -> str:
 
 async def _safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
     """Edit the callback message if it is still available, otherwise answer."""
-    if callback.message is not None:
+    if isinstance(callback.message, Message):
         await callback.message.edit_text(text, **kwargs)
     else:
         await callback.answer(text, show_alert=True)
@@ -84,86 +79,20 @@ def _resolve_fight(
     attacker_size: int,
     defender_size: int,
     reaction_sec: float,
-    attacker_name: str,
-    defender_name: str,
-    attacker_raw_name: str,
-    defender_raw_name: str,
     base_chance: float,
-) -> tuple[bool, str, str, str, float]:
+) -> tuple[bool, float]:
     reaction_mod = 0.0
-    reaction_comment = texts.DUEL_DEFAULT_REACTION
 
-    for lo, hi, mod, comment in REACTION_TIERS:
+    for lo, hi, mod, _comment in REACTION_TIERS:
         if lo <= reaction_sec < hi:
             reaction_mod = mod
-            reaction_comment = comment.format(loser=defender_name)
             break
 
     luck = random.uniform(-0.1, 0.1)
     chance = max(0.05, min(0.95, base_chance + reaction_mod + luck))
     winner_is_attacker = random.random() < chance
 
-    if winner_is_attacker:
-        winner = attacker_name
-        loser = defender_name
-        loser_raw = defender_raw_name
-    else:
-        winner = defender_name
-        loser = attacker_name
-        loser_raw = attacker_raw_name
-
-    victory = random.choice(VICTORY_LINES).format(winner=winner, loser=loser)
-    technique = random.choice(TECHNIQUE_LINES).format(loser_name=loser_raw)
-
-    return winner_is_attacker, victory, technique, reaction_comment, chance
-
-
-def _build_result_message(
-    victory_line: str,
-    technique_line: str,
-    steal_line: str,
-    attacker_name: str,
-    defender_name: str,
-    attacker_was: int,
-    attacker_now: int,
-    defender_was: int,
-    defender_now: int,
-    loser_name: str,
-    stake: int,
-    winner_profit: int,
-    corp_tax: int,
-    base_chance: float,
-    final_chance: float,
-    reaction_comment: str,
-    corp_line: str,
-    attacker_tag: str,
-    defender_tag: str,
-    disease_note: str,
-    infection_msg: str,
-) -> str:
-    result = texts.duel_result(
-        victory_line,
-        technique_line,
-        steal_line,
-        winner_profit,
-        corp_tax,
-        attacker_name,
-        attacker_was,
-        attacker_now,
-        attacker_tag,
-        defender_name,
-        defender_was,
-        defender_now,
-        defender_tag,
-        base_chance,
-        final_chance,
-    )
-    if disease_note:
-        result += f"\n{disease_note}"
-    result += f"\n{reaction_comment}\n\n{corp_line}"
-    if infection_msg:
-        result += f"\n\n{infection_msg}"
-    return result
+    return winner_is_attacker, chance
 
 
 @router.message(Command("duel"))
@@ -384,17 +313,11 @@ async def on_duel_accept(callback: CallbackQuery, callback_data: DuelCallback) -
                 )
         base_chance = adjusted
 
-        winner_is_attacker, victory_line, technique_line, reaction_comment, final_chance = (
-            _resolve_fight(
-                attacker_size,
-                defender_size,
-                elapsed,
-                _mention(data["attacker_id"], attacker["name"]),
-                _mention(data["defender_id"], defender["name"]),
-                attacker["name"],
-                defender["name"],
-                base_chance,
-            )
+        winner_is_attacker, final_chance = _resolve_fight(
+            attacker_size,
+            defender_size,
+            elapsed,
+            base_chance,
         )
 
         if winner_is_attacker:
@@ -437,38 +360,35 @@ async def on_duel_accept(callback: CallbackQuery, callback_data: DuelCallback) -
         if infection_msg:
             infection_msg = f"{loser['name']}: {infection_msg}"
 
-        steal_line = random.choice(STEAL_LINES).format(stolen=stake, loser=loser["name"])
-        corp_line = random.choice(CORP_LINES).format(tax=corp_tax)
-
         attacker_tag = disease_tag(attacker)
         defender_tag = disease_tag(defender)
         disease_note = "\n".join(disease_note_parts)
-
-        result = _build_result_message(
-            victory_line,
-            technique_line,
-            steal_line,
-            attacker["name"],
-            defender["name"],
-            attacker_size,
-            storage[a_str]["size"],
-            defender_size,
-            storage[d_str]["size"],
-            loser["name"],
-            stake,
-            winner_profit,
-            corp_tax,
-            base_chance,
-            final_chance,
-            reaction_comment,
-            corp_line,
-            attacker_tag,
-            defender_tag,
-            disease_note,
-            infection_msg,
+        winner_name = winner["name"]
+        loser_name = loser["name"]
+        result = public.duel_result(
+            public.DuelView(
+                winner=winner_name,
+                loser=loser_name,
+                attacker=attacker["name"],
+                defender=defender["name"],
+                attacker_before=attacker_size,
+                attacker_after=storage[a_str]["size"],
+                defender_before=defender_size,
+                defender_after=storage[d_str]["size"],
+                stake=stake,
+                profit=winner_profit,
+                tax=corp_tax,
+                base_chance=base_chance,
+                final_chance=final_chance,
+                winner_was_attacker=winner_is_attacker,
+                reaction_seconds=elapsed,
+                garnished=duel_garnished,
+                disease_note=disease_note,
+                infection=infection_msg,
+                attacker_tag=attacker_tag,
+                defender_tag=defender_tag,
+            )
         )
-        if duel_garnished:
-            result += f"\n\n{texts.duel_garnished(duel_garnished)}"
 
         await save_storage(chat_id, storage)
 

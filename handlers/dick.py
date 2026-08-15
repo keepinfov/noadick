@@ -1,4 +1,3 @@
-import html
 from datetime import datetime, timedelta
 
 from aiogram import Router
@@ -12,6 +11,7 @@ from models.disease import (
     disease_tag,
     roll_infection,
 )
+from presentation import public
 from repositories import events as E
 from repositories.players import (
     PlayerDict,
@@ -43,10 +43,6 @@ def _time_until_midnight(now: datetime) -> str:
     hours = total // 3600
     minutes = (total % 3600) // 60
     return f"{hours} ч {minutes} мин"
-
-
-def _mention(user_id: int, name: str) -> str:
-    return f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
 
 
 @router.message(Command("dick"))
@@ -85,13 +81,12 @@ async def cmd_dick(message: Message) -> None:
                     await save_storage(chat_id, storage)
                 # Already played today: reply with the reminder on every repeat,
                 # with no throttle and no auto-delete.
-                mention = _mention(user_id, user.first_name)
                 rank = _rank(storage, user_id)
                 remaining = _time_until_midnight(now)
                 dtag = disease_tag(owner)
-                text = texts.dick_already_today(mention, owner["size"], rank, remaining)
-                if dtag:
-                    text += f"\n{dtag}"
+                text = public.dick_repeat(
+                    user_id, user.first_name, owner["size"], rank, remaining, dtag
+                )
                 await message.answer(text, parse_mode="HTML")
                 return
 
@@ -100,6 +95,7 @@ async def cmd_dick(message: Message) -> None:
         player: PlayerDict = storage.get(uid_str, {"name": user.first_name, "size": 0, "last": 0})
 
         before = player["size"]
+        rank_before = _rank(storage, user_id)
         delta = apply_growth_mod(player, rolled)
         debt_added = 0
         debt_due_at = 0
@@ -121,10 +117,8 @@ async def cmd_dick(message: Message) -> None:
         storage[uid_str] = player
 
         infection = roll_infection(eff.diseases_enabled)
-        disease_msg = ""
         if infection:
             player["disease"] = {"id": infection.id, "caught_at": int(now.timestamp())}
-            disease_msg = f"\n\n{infection.catch_message}"
 
         # Bank hooks: divert part of a positive gain toward a defaulted loan, and
         # credit one active-day's deposit interest. Garnish mutates player["size"],
@@ -134,39 +128,27 @@ async def cmd_dick(message: Message) -> None:
         storage[uid_str] = player
         dep_interest = await bank.accrue_deposit_on_play(chat_id, user_id, now.date().isoformat())
 
-        mention = _mention(user_id, user.first_name)
         rank = _rank(storage, user_id)
-        remaining = _time_until_midnight(now)
-
-        if pisyago is not None and pisyago.covered:
-            change_text = texts.dick_pisyago_assessed(
-                pisyago.loss,
-                pisyago.covered,
-                pisyago.debt,
-                debt_due_at,
-                debt_defaulted,
-            )
-        elif debt_added:
-            change_text = texts.dick_debt_assessed(debt_added, debt_due_at, debt_defaulted)
-        elif delta >= 0:
-            change_text = texts.dick_funded_growth(payout) if payout else texts.dick_grew(delta)
-        else:
-            change_text = texts.dick_shrank(delta)
-
         dtag = disease_tag(player)
-        text = texts.dick_result(mention, change_text, player["size"], rank, remaining)
-        if dtag and not infection:
-            text += f"\n{dtag}"
-        text += disease_msg
-        if garnished:
-            text += f"\n{texts.dick_garnished(garnished)}"
-        if dep_interest:
-            text += f"\n{texts.dick_deposit_interest(dep_interest)}"
-        if pisyago is not None and (
-            pisyago.covered
-            or (pisyago.coverage_pct > 0 and pisyago.reset_at > 0 and pisyago.remaining == 0)
-        ):
-            text += f"\n{texts.dick_pisyago_status(pisyago)}"
+        text = public.dick_result(
+            public.DickView(
+                user_id=user_id,
+                name=user.first_name,
+                game_delta=delta,
+                size=player["size"],
+                rank=rank,
+                rank_before=rank_before,
+                payout=payout,
+                pisyago=pisyago,
+                debt=debt_added,
+                debt_due=texts.fmt_datetime(debt_due_at) if debt_due_at else "",
+                debt_defaulted=debt_defaulted,
+                garnished=garnished,
+                deposit_interest=dep_interest,
+                disease=dtag if not infection else "",
+                infection=infection.catch_message if infection else "",
+            )
+        )
 
         await save_storage(chat_id, storage)
 

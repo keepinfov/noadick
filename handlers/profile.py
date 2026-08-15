@@ -8,6 +8,7 @@ import texts
 from handlers import cooldowns
 from handlers.replies import reply_target
 from models.disease import DISEASE_BY_ID
+from presentation import public
 from repositories import poker as poker_repo
 from services import bank
 from services import stats as S
@@ -39,45 +40,7 @@ def _mention(user_id: int, name: str) -> str:
 
 
 def format_global_profile(stats: S.GlobalProfileStats) -> str:
-    name = _mention_from_name(stats.name)
-    lines = [texts.global_header(name)]
-
-    if stats.is_banned:
-        reason = html.escape(stats.ban_reason) if stats.ban_reason else texts.BAN_NO_REASON
-        if stats.ban_until is not None:
-            lines.append(texts.global_ban_until(texts.fmt_datetime(stats.ban_until), reason))
-        else:
-            lines.append(texts.global_ban_forever(reason))
-
-    lines.append("")
-    lines.append(texts.GLOBAL_CHATS_HEADER)
-    if stats.chats:
-        for c in stats.chats:
-            lines.append(
-                texts.global_chat_line(
-                    html.escape(c.title), c.size, c.rank, c.net_worth, c.net_rank
-                )
-            )
-    else:
-        lines.append(texts.GLOBAL_NO_CHATS)
-
-    lines.append("")
-    lines.append(texts.global_plays(stats.plays, stats.total_grown, stats.total_lost))
-    if stats.best_roll is not None and stats.worst_roll is not None:
-        lines.append(texts.global_best_worst(stats.best_roll, stats.worst_roll))
-    lines.append(texts.global_duels(stats.duels_total, stats.wins, stats.losses, stats.winrate))
-    lines.append(texts.global_infections(stats.infections))
-    lines.append(texts.global_record(stats.best_size_ever))
-    if stats.first_play_ts is not None:
-        lines.append(texts.global_tenure(texts.fmt_date(stats.first_play_ts)))
-
-    return "\n".join(lines)
-
-
-def _mention_from_name(name: str) -> str:
-    """Global profile is shown in DM/self context, so we render the name as
-    plain escaped text rather than a tg:// mention."""
-    return f"<b>{html.escape(name)}</b>"
+    return public.global_profile(stats)
 
 
 async def _send_global_profile(message: Message, user_id: int, name: str | None) -> None:
@@ -118,39 +81,17 @@ async def cmd_me(message: Message, bot: Bot) -> None:
         )
         return
 
-    name = _mention(user_id, profile.name)
-    lines = [
-        texts.profile_header(name),
-        texts.profile_size(profile.current_size, profile.rank),
-        texts.profile_wealth(profile.net_worth, profile.net_rank),
-        "",
-        texts.profile_plays(profile.plays, profile.days_played),
-        texts.profile_growth(profile.total_grown, profile.total_lost),
-    ]
-    if profile.best_day is not None and profile.worst_day is not None:
-        lines.append(texts.profile_best_worst(profile.best_day, profile.worst_day))
-
-    lines.append("")
-    lines.append(
-        texts.profile_duels(profile.duels_total, profile.wins, profile.losses, profile.winrate)
-    )
-    lines.append(texts.profile_stolen(profile.stolen_total, profile.lost_in_duels))
-    lines.append(texts.profile_infections(profile.diseases_caught))
-
     own_profile = bool(message.from_user and target.id == message.from_user.id)
+    bank_line = None
+    poker_stack = 0
     if own_profile:
         bank_line = texts.profile_bank(await bank.get_summary(chat_id, user_id))
-        if bank_line:
-            lines.append(bank_line)
-
         poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
-        if poker_stack:
-            lines.append(texts.profile_poker_stack(poker_stack))
-
+    disease_name = ""
     if profile.current_disease:
         d = DISEASE_BY_ID.get(profile.current_disease)
         if d:
-            lines.append(texts.profile_current_disease(d.name))
+            disease_name = d.name
 
     # Self-only deep-link to the global profile: the link opens the clicker's
     # own DM and carries no foreign id, so it cannot show someone else's
@@ -167,4 +108,14 @@ async def cmd_me(message: Message, bot: Bot) -> None:
         if buttons:
             reply_markup = InlineKeyboardMarkup(inline_keyboard=[[button] for button in buttons])
 
-    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=reply_markup)
+    await message.answer(
+        public.profile(
+            profile,
+            user_id=user_id,
+            bank_line=bank_line,
+            poker_stack=poker_stack,
+            disease=disease_name,
+        ),
+        parse_mode="HTML",
+        reply_markup=reply_markup,
+    )

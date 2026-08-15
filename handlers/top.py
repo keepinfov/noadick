@@ -10,6 +10,7 @@ from aiogram.types import (
 import texts
 from handlers import cooldowns
 from models.disease import check_expire
+from presentation import public
 from repositories.players import get_chat_lock, get_storage, save_storage
 from services import analytics
 from services.global_settings import get_config_sync
@@ -69,7 +70,7 @@ async def cmd_top(message: Message, bot: Bot) -> None:
     png = await analytics.render_png(data)
     await message.answer_photo(
         BufferedInputFile(png, filename="leader-race.png"),
-        caption=analytics.caption(data),
+        caption=public.top_caption(data),
         parse_mode="HTML",
         reply_markup=await _details_keyboard(bot, chat_id),
     )
