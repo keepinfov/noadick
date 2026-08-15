@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -302,6 +303,86 @@ class Event(Base):
     size_after: Mapped[int] = mapped_column(Integer, default=0)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
+
+
+class WeeklySeason(Base):
+    """A chat-local calendar week and its immutable aggregate snapshot."""
+
+    __tablename__ = "weekly_seasons"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "season_number", name="uq_weekly_season_chat_number"),
+        Index("ix_weekly_seasons_chat_status", "chat_id", "status"),
+        Index("ix_weekly_seasons_chat_end", "chat_id", "ends_at"),
+        Index(
+            "uq_weekly_seasons_live_chat",
+            "chat_id",
+            unique=True,
+            sqlite_where=sql_text("status = 'live'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE")
+    )
+    # Zero is reserved for the installation-week warm-up and is never exposed
+    # as an archived season. Official seasons are numbered from one.
+    season_number: Mapped[int] = mapped_column(Integer)
+    timezone: Mapped[str] = mapped_column(String(64))
+    starts_at: Mapped[int] = mapped_column(Integer)
+    ends_at: Mapped[int] = mapped_column(Integer)
+    tracking_since: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="live")
+    is_partial: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_empty: Mapped[bool] = mapped_column(Boolean, default=True)
+    publication_status: Mapped[str] = mapped_column(String(16), default="pending")
+    published_at: Mapped[int] = mapped_column(Integer, default=0)
+    published_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    length_start: Mapped[int] = mapped_column(Integer, default=0)
+    length_end: Mapped[int] = mapped_column(Integer, default=0)
+    wealth_start: Mapped[int] = mapped_column(Integer, default=0)
+    wealth_end: Mapped[int] = mapped_column(Integer, default=0)
+    emission: Mapped[int] = mapped_column(Integer, default=0)
+    best_dick_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    best_dick_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    worst_dick_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    worst_dick_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
+    finalized_at: Mapped[int] = mapped_column(Integer, default=0)
+
+    players: Mapped[list[WeeklySeasonPlayer]] = relationship(
+        back_populates="season", cascade="all, delete-orphan"
+    )
+
+
+class WeeklySeasonPlayer(Base):
+    """Per-player start/end values and competition totals frozen at close."""
+
+    __tablename__ = "weekly_season_players"
+    __table_args__ = (
+        Index("ix_weekly_season_players_dick", "season_id", "dick_total"),
+        Index("ix_weekly_season_players_wealth", "season_id", "wealth_delta"),
+    )
+
+    season_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("weekly_seasons.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    start_length: Mapped[int] = mapped_column(Integer, default=0)
+    end_length: Mapped[int] = mapped_column(Integer, default=0)
+    start_wealth: Mapped[int] = mapped_column(Integer, default=0)
+    end_wealth: Mapped[int] = mapped_column(Integer, default=0)
+    dick_total: Mapped[int] = mapped_column(Integer, default=0)
+    dick_count: Mapped[int] = mapped_column(Integer, default=0)
+    active_days: Mapped[int] = mapped_column(Integer, default=0)
+    best_dick_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    worst_dick_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wealth_delta: Mapped[int] = mapped_column(Integer, default=0)
+
+    season: Mapped[WeeklySeason] = relationship(back_populates="players")
 
 
 class LegacyChat(Base):
