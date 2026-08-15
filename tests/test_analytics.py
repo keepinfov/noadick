@@ -41,7 +41,7 @@ async def test_growth_dashboard_png_and_csv(db) -> None:
         events.DICK,
         delta=5,
         size_after=15,
-        meta={"rolled": 5, "emitted": 3, "clipped": 0},
+        meta={"rolled": 9, "game_delta": 5, "emitted": 3, "clipped": 0},
         created_at=now - 3600,
     )
     await events.log_event(
@@ -63,6 +63,7 @@ async def test_growth_dashboard_png_and_csv(db) -> None:
 
     assert ("Нажатий", "2") in data.metrics
     assert ("Чистый итог", "+3 см") in data.metrics
+    assert ("Средний бросок", "+1.5 см") in data.metrics
     assert data.chart_kind == "line"
     assert data.series[0][0] == "Чистое состояние"
     assert data.series[0][1][-1] == 13

@@ -42,6 +42,17 @@ CORP_BAILIN = "corp_bailin"
 PISYAGO = "pisyago"
 
 
+def dick_game_delta(event: Event) -> int:
+    """Return the gameplay result of a /dick roll, before economy effects.
+
+    ``game_delta`` is canonical for newly recorded events.  Older rows only
+    stored the raw roll, so keep that as the best available compatibility
+    fallback before falling back to the realised size delta.
+    """
+    meta = event.meta or {}
+    return int(meta.get("game_delta", meta.get("rolled", event.delta)))
+
+
 def add_event(
     session: AsyncSession,
     chat_id: int,

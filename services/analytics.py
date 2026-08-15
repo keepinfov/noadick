@@ -606,7 +606,7 @@ async def _dashboard_uncached(
         chart_title = "Все действия по времени"
     elif section == "growth":
         relevant = [event for event in events if event.type == E.DICK]
-        rolled = [int((event.meta or {}).get("rolled", event.delta)) for event in relevant]
+        rolled = [E.dick_game_delta(event) for event in relevant]
         positive = sum(value > 0 for value in rolled)
         negative = sum(value < 0 for value in rolled)
         net = sum(event.delta for event in relevant)

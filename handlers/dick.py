@@ -180,6 +180,7 @@ async def cmd_dick(message: Message) -> None:
             size_after=player["size"],
             meta={
                 "rolled": rolled,
+                "game_delta": delta,
                 "pisyago_covered": pisyago.covered if pisyago else 0,
                 "roll_debt": debt_added,
                 "emitted": payout.emitted if payout else 0,
