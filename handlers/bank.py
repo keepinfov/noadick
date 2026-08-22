@@ -57,7 +57,14 @@ async def _main_kb(uid: int) -> InlineKeyboardMarkup:
                 text=texts.BTN_BANK_LOAN, callback_data=_bank_callback("loan", uid)
             ),
         ],
-        [InlineKeyboardButton(text=texts.BTN_BANK_CORP, callback_data=_bank_callback("corp", uid))],
+        [
+            InlineKeyboardButton(
+                text=texts.BTN_BANK_SEKASKO, callback_data=_bank_callback("sek", uid)
+            ),
+            InlineKeyboardButton(
+                text=texts.BTN_BANK_CORP, callback_data=_bank_callback("corp", uid)
+            ),
+        ],
     ]
     if corp.rules_url_rude:
         rows.append([InlineKeyboardButton(text=texts.BTN_RULES_RUDE, url=corp.rules_url_rude)])
@@ -108,19 +115,8 @@ def _dep_kb(uid: int) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="СЕКАСКО +5", callback_data=_bank_callback("sins", uid, "5")
-                ),
-                InlineKeyboardButton(
-                    text="СЕКАСКО +10", callback_data=_bank_callback("sins", uid, "10")
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="СЕКАСКО максимум", callback_data=_bank_callback("sins", uid, "all")
-                ),
-                InlineKeyboardButton(
-                    text="СЕКАСКО сумма", callback_data=_bank_callback("sinsc", uid)
-                ),
+                    text=texts.BTN_BANK_SEKASKO, callback_data=_bank_callback("sek", uid)
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -129,6 +125,50 @@ def _dep_kb(uid: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def _sekasko_kb(uid: int, summary: bank.BankSummary) -> InlineKeyboardMarkup:
+    available = summary.sekasko.available
+    purchase_buttons: list[InlineKeyboardButton] = []
+    for amount in (5, 10):
+        if amount >= available:
+            continue
+        premium = bank.sekasko_premium(amount, summary.sekasko.premium_pct)
+        purchase_buttons.append(
+            InlineKeyboardButton(
+                text=f"+{amount} покрытия · премия {premium}",
+                callback_data=_bank_callback("sins", uid, str(amount)),
+            )
+        )
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if purchase_buttons:
+        rows.append(purchase_buttons)
+    if available > 0:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"+{available} покрытия · премия "
+                        f"{summary.sekasko.available_premium} (макс.)"
+                    ),
+                    callback_data=_bank_callback("sins", uid, "all"),
+                )
+            ]
+        )
+        if available > 1:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="✏️ Другая сумма покрытия",
+                        callback_data=_bank_callback("sinsc", uid),
+                    )
+                ]
+            )
+    rows.append(
+        [InlineKeyboardButton(text=texts.BTN_BANK_BACK, callback_data=_bank_callback("home", uid))]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _loan_kb(uid: int) -> InlineKeyboardMarkup:
@@ -352,6 +392,24 @@ async def cb_loan(callback: CallbackQuery, callback_data: BankCallback | None = 
     await callback.answer()
 
 
+@router.callback_query(BankCallback.filter(F.action == "sek"))
+@router.callback_query(F.data.startswith("bk:sek:"))
+async def cb_sekasko_screen(
+    callback: CallbackQuery, callback_data: BankCallback | None = None
+) -> None:
+    try:
+        uid, _ = _callback_args(callback, callback_data)
+    except (IndexError, ValueError):
+        await _invalid_callback(callback)
+        return
+    if not _owns(callback, uid):
+        await callback.answer(texts.BANK_NOT_YOURS, show_alert=True)
+        return
+    summary = await bank.get_summary(callback.message.chat.id, uid)
+    await _edit(callback, texts.bank_sekasko_screen(summary), _sekasko_kb(uid, summary))
+    await callback.answer()
+
+
 @router.callback_query(BankCallback.filter(F.action == "corp"))
 @router.callback_query(F.data.startswith("bk:corp:"))
 async def cb_corp(callback: CallbackQuery, callback_data: BankCallback | None = None) -> None:
@@ -398,10 +456,28 @@ async def _run_op(callback: CallbackQuery, uid: int, notice: str, back_to: str) 
     summary = await bank.get_summary(chat_id, uid)
     if back_to == "dep":
         await _edit(callback, texts.bank_dep_screen(summary), _dep_kb(uid))
+    elif back_to == "sek":
+        await _edit(callback, texts.bank_sekasko_screen(summary), _sekasko_kb(uid, summary))
     elif back_to == "loan":
         await _edit(callback, texts.bank_loan_screen(summary), _loan_kb(uid))
     else:
         await _edit(callback, texts.bank_screen(summary), await _main_kb(uid))
+
+
+async def _announce_bail_in(message: Message, initiator: str, result: bank.OpResult) -> None:
+    if result.bail_in is None:
+        return
+    info = result.bail_in
+    await message.answer(
+        texts.bank_bail_in_notice(
+            initiator,
+            info.wiped,
+            info.payout,
+            info.balance,
+            info.deficit,
+        ),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(BankCallback.filter(F.action == "dopen"))
@@ -466,6 +542,7 @@ async def cb_dep_withdraw(
         )
         return
     await _run_op(callback, uid, texts.dep_withdrawn(res.amount, res.extra), "dep")
+    await _announce_bail_in(callback.message, callback.from_user.full_name, res)
 
 
 @router.callback_query(BankCallback.filter(F.action == "sins"))
@@ -484,13 +561,7 @@ async def cb_sekasko(callback: CallbackQuery, callback_data: BankCallback | None
     if summary.deposit is None:
         await callback.answer(texts.BANK_ERR["no_deposit"], show_alert=True)
         return
-    from services.global_settings import get_config_sync
-
-    available = max(
-        0,
-        min(summary.deposit.principal, get_config_sync().sekasko_max_coverage)
-        - summary.deposit.insured,
-    )
+    available = summary.sekasko.available
     amount = available if arg == "all" else int(arg) if arg.isdigit() else 0
     try:
         res = await bank.buy_sekasko(chat_id, uid, amount)
@@ -499,7 +570,7 @@ async def cb_sekasko(callback: CallbackQuery, callback_data: BankCallback | None
             texts.BANK_ERR.get(e.code, texts.BANK_ERR["bad_amount"]), show_alert=True
         )
         return
-    await _run_op(callback, uid, texts.sekasko_bought(res.amount, res.extra), "dep")
+    await _run_op(callback, uid, texts.sekasko_bought(res.amount, res.extra), "sek")
 
 
 @router.callback_query(BankCallback.filter(F.action == "ltake"))
@@ -596,9 +667,19 @@ async def _prompt_amount(
     if not _owns(callback, uid):
         await callback.answer(texts.BANK_NOT_YOURS, show_alert=True)
         return
+    if action == "sinsc":
+        summary = await bank.get_summary(callback.message.chat.id, uid)
+        if summary.sekasko.available <= 0:
+            await callback.answer(texts.BANK_ERR["insurance_limit"], show_alert=True)
+            return
+        prompt = texts.bank_enter_sekasko_amount(
+            summary.sekasko.available, summary.sekasko.premium_pct
+        )
+    else:
+        prompt = texts.bank_enter_amount(_ACTION_LABEL[action])
     await state.set_state(BankStates.amount)
     await state.update_data(action=action, uid=uid, chat_id=callback.message.chat.id)
-    await _edit(callback, texts.bank_enter_amount(_ACTION_LABEL[action]), _cancel_kb(uid))
+    await _edit(callback, prompt, _cancel_kb(uid))
     await callback.answer()
 
 
@@ -704,6 +785,15 @@ async def msg_amount(message: Message, state: FSMContext) -> None:
     await state.clear()
     summary = await bank.get_summary(chat_id, uid)
     await message.answer(notice, parse_mode="HTML")
-    await message.answer(
-        texts.bank_screen(summary), reply_markup=await _main_kb(uid), parse_mode="HTML"
-    )
+    if action == "dwdc":
+        await _announce_bail_in(message, message.from_user.full_name, res)
+    if action == "sinsc":
+        await message.answer(
+            texts.bank_sekasko_screen(summary),
+            reply_markup=_sekasko_kb(uid, summary),
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            texts.bank_screen(summary), reply_markup=await _main_kb(uid), parse_mode="HTML"
+        )

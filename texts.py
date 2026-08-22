@@ -1203,11 +1203,18 @@ def bank_screen(s) -> str:
         )
         lines.append(f"💰 Вклад: <b>{d.principal}</b> (+{d.accrued} см) · {status}")
         lines.append(
-            f"🩲 СЕКАСКО: <b>{d.insured}</b> см"
-            + (f" до {fmt_datetime(d.insurance_expires_at)}" if d.insured else " — голая жопа")
+            f"🛟 Защита тела: база {s.sekasko.base_protected} + "
+            f"СЕКАСКО {s.sekasko.sekasko_protected} = "
+            f"<b>{s.sekasko.total_protected}</b> см · под риском <b>{s.sekasko.risky}</b>"
         )
     else:
         lines.append("💰 Вклад: голяк. Деньги от тебя шарахаются, нищук.")
+        if s.sekasko.active:
+            lines.append(
+                f"🩲 СЕКАСКО: активно <b>{s.sekasko.active}</b> см — покрытие ждёт будущий вклад."
+            )
+        else:
+            lines.append("🩲 СЕКАСКО: активного покрытия нет.")
     if s.loan:
         ln = s.loan
         flag = (
@@ -1250,7 +1257,10 @@ def bank_dep_screen(s) -> str:
         lines += [
             f"Тело: <b>{d.principal}</b>",
             f"Накапало: <b>{d.accrued}</b>",
-            f"СЕКАСКО защищает: <b>{d.insured}</b> см",
+            f"Базовая защита: <b>{s.sekasko.base_protected}</b> см",
+            f"Защита СЕКАСКО поверх базы: <b>{s.sekasko.sekasko_protected}</b> см",
+            f"Всего защищено тело: <b>{s.sekasko.total_protected}</b> см",
+            f"Рисковое тело: <b>{s.sekasko.risky}</b> см",
             status,
         ]
     else:
@@ -1259,7 +1269,79 @@ def bank_dep_screen(s) -> str:
         "",
         f"На руках: {s.size}",
         "",
+        f"🛟 Первые {s.sekasko.base_limit} см тела защищены без СЕКАСКО. СЕКАСКО прикрывает тело только сверх этой базы.",
+        "Защита действует при случайной конфискации и распиле Корпорации. Начисленные проценты и взыскание просроченного кредита не защищены.",
+        "",
         "⚠️ Процент капает только в дни, когда ты тыкаешь /dick, потом быстро дохнет и упирается в потолок Корпорации. Дробная мелочь копится честно, но халявного +1 больше нет.",
+    ]
+    return "\n".join(lines)
+
+
+def bank_sekasko_screen(s) -> str:
+    policy = s.sekasko
+    lines = [BANK_TITLE, "", "🩲 <b>СЕКАСКО вклада</b>", ""]
+
+    if policy.active:
+        lines.append(f"Активное покрытие: <b>{policy.active}</b> см")
+        if policy.next_expiring >= policy.active:
+            lines.append(
+                f"Всё активное покрытие закончится {fmt_datetime(policy.next_expires_at)} "
+                f"(через {_dur(policy.next_expires_at - _now_ts())})."
+            )
+        else:
+            remaining = policy.active - policy.next_expiring
+            lines.append(
+                f"Ближайшее уменьшение: −{policy.next_expiring} см "
+                f"{fmt_datetime(policy.next_expires_at)} "
+                f"(через {_dur(policy.next_expires_at - _now_ts())}); останется {remaining} см."
+            )
+    else:
+        lines.append("Активного покрытия нет.")
+
+    lines.append("")
+    if s.deposit:
+        lines += [
+            f"Тело вклада: <b>{s.deposit.principal}</b> см",
+            f"Базовая защита без полиса: <b>{policy.base_protected}</b> см",
+            f"СЕКАСКО применено поверх базы: <b>{policy.sekasko_protected}</b> см",
+            f"Всего защищено: <b>{policy.total_protected}</b> см",
+            f"Рисковое тело: <b>{policy.risky}</b> см",
+        ]
+        if policy.unused:
+            lines.append(
+                f"Пока не задействовано: <b>{policy.unused}</b> см — покрытие больше тела вклада."
+            )
+        lines += [
+            "",
+            f"База без полиса: до <b>{policy.base_limit}</b> см тела",
+            f"Лимит СЕКАСКО сверх базы для этого вклада: <b>{policy.purchase_limit}</b> см",
+            f"Свободно в лимите: <b>{policy.limit_available}</b> см",
+            f"Можно купить сейчас: <b>{policy.available}</b> см",
+        ]
+        if policy.available < policy.limit_available:
+            lines.append("↳ Сумму ограничивают сантиметры на руках для оплаты премии.")
+    else:
+        lines += [
+            "Покрывать пока нечего: вклада нет.",
+            "Уже активное покрытие не пропадает и применится к телу будущего вклада.",
+            f"Первые <b>{policy.base_limit}</b> см будущего тела будут защищены без полиса.",
+            f"Текущий лимит для выдачи нового покрытия: <b>{policy.configured_limit}</b> см.",
+            "Новое покрытие можно купить после открытия вклада.",
+        ]
+
+    lines += [
+        "",
+        f"Премия: <b>{policy.premium_pct}%</b> от выбранного покрытия, округляется вверх; минимум 1 см.",
+    ]
+    if policy.available:
+        lines.append(
+            f"Покрытие {policy.available} см сейчас стоит <b>{policy.available_premium}</b> см премии."
+        )
+    lines += [
+        "",
+        "⚠️ Сумма в кнопке — это новое покрытие, не цена. Премия указана рядом и списывается с сантиметров на руках.",
+        "⚠️ Покрытие не выдаёт сантиметры на руки. База и СЕКАСКО защищают только тело от случайной конфискации и распила Корпорации.",
+        "⚠️ Начисленные проценты и взыскание просроченного кредита не защищаются никогда.",
     ]
     return "\n".join(lines)
 
@@ -1291,9 +1373,9 @@ def bank_loan_screen(s) -> str:
 def corp_screen(corp) -> str:
     head = "🏢 <b>Корпорация</b>"
     if corp.status == "sanation":
-        mood = f"🚨 САНАЦИЯ до {fmt_datetime(corp.sanation_deadline)}. Касса обосралась и теперь считает ваши долги."
+        mood = "🚨 СТАРАЯ САНАЦИЯ. На следующем проходе Корпорация немедленно проведёт распил без отсрочки."
     elif corp.status == "recovery":
-        mood = "🩼 ПОСЛЕ РАСПИЛА. Банк ещё ползёт на культях и копит живые деньги."
+        mood = f"🩼 ПОСЛЕ РАСПИЛА. Баланс кассы: <b>{corp.balance}</b> см; банк ползёт из минуса и копит живые деньги."
     else:
         mood = f"💼 Касса пока не сдохла: <b>{corp.balance}</b> см."
     return (
@@ -1316,6 +1398,14 @@ def bank_enter_amount(action: str) -> str:
     return f"Введи сумму ({action}) числом. Или жми «Отмена»."
 
 
+def bank_enter_sekasko_amount(available: int, premium_pct: int) -> str:
+    return (
+        "Введи сумму нового покрытия СЕКАСКО числом. "
+        f"Доступно до {available} см; премия {premium_pct}% от покрытия "
+        "с округлением вверх (минимум 1 см). Или жми «Отмена»."
+    )
+
+
 # Op result / error notices.
 BANK_ERR = {
     "no_size": "💢 Класть нечего, голодранец. Сперва отрасти хоть что-то через /dick.",
@@ -1326,8 +1416,7 @@ BANK_ERR = {
     "corp_broke": "💢 В кассе Корпорации шаром покати. Раздавать нечего — иди наполняй её дуэлями, а потом приходи клянчить.",
     "loan_denied": "💢 Тебе только что дали от ворот поворот. Не долби в кассу как дятел — посиди в углу, остынь и приходи позже.",
     "bad_amount": "💢 Это не сумма, а каракули. Тыкни нормальное число, грамотей.",
-    "corp_frozen": "💢 Банк лежит мордой в асфальте. Во время санации новые фокусы с деньгами закрыты.",
-    "corp_sanation": "💢 Касса не тянет снятие. Запущена санация: семь дней должникам на спасение, потом вкладчикам устроят секаторный субботник.",
+    "corp_frozen": "💢 Касса заморожена и выгребает дефицит. Новые вклады, кредиты и СЕКАСКО закрыты до восстановления.",
     "insurance_limit": "💢 Столько СЕКАСКО не налезет. Страхуй только доступную часть до лимита, математический онанист.",
     "insurance_cash": "💢 На страховую премию не хватает ликвидных сантиметров. Даже трусы в кредит тебе не дают.",
 }
@@ -1341,6 +1430,41 @@ def dep_withdrawn(amount: int, penalty: int) -> str:
     if penalty > 0:
         return f"➖ Дёрнул раньше срока: на руки <b>{amount}</b>, а <b>{penalty}</b> Корпорация отжала за твоё нетерпение. Будешь знать."
     return f"➖ Забрал со вклада <b>{amount}</b>. Дотерпел до срока — на этот раз без штрафа, везунчик."
+
+
+def bank_bail_in_notice(
+    initiator: str,
+    wiped: int,
+    payout: int,
+    balance: int,
+    deficit: int,
+) -> str:
+    safe_initiator = html.escape(initiator)
+    return (
+        f"🏆 <b>{safe_initiator}</b> первым добрался до кассы и устроил Корпорации распил!\n\n"
+        "Аплодисменты финансовому чутью — защищённая часть ушла победителю первой.\n"
+        f"С вкладов суммарно списано: <b>{wiped}</b> см.\n"
+        f"Защищённая выплата по запросу: <b>{payout}</b> см.\n"
+        f"Баланс кассы после выплаты: <b>{balance}</b> см.\n"
+        f"Дефицит финансирования: <b>{deficit}</b> см.\n\n"
+        "Чужие остатки и персональные балансы не публикуются."
+    )
+
+
+def bank_legacy_bail_in_notice(
+    wiped: int,
+    protected_claims: int,
+    balance: int,
+    deficit: int,
+) -> str:
+    return (
+        "🚨 <b>Старая санация завершена автоматически</b>\n\n"
+        f"С вкладов суммарно списано: <b>{wiped}</b> см.\n"
+        f"Защищённые требования сохранены: <b>{protected_claims}</b> см.\n"
+        f"Баланс кассы: <b>{balance}</b> см.\n"
+        f"Дефицит финансирования: <b>{deficit}</b> см.\n\n"
+        "Персональные остатки вкладчиков не публикуются."
+    )
 
 
 def loan_taken(amount: int, due_at: int) -> str:
@@ -1375,24 +1499,6 @@ def collector_reminder(debt: int, overdue_for: int) -> str:
         f"Слышь, должник. За тобой <b>{debt}</b>, и просрочка уже {_dur(overdue_for)}. "
         f"Долг мы заморозили, зато теперь тихонько режем твои /dick и победы. "
         f"Тащи бабки через /bank, пока мы добрые — а добрые мы недолго."
-    )
-
-
-def crisis_debtor_reminder(debt: int, deadline: int) -> str:
-    return (
-        f"🚨 Из-за таких финансовых импотентов, как ты, местная Корпорация дохнет. "
-        f"За тобой <b>{debt}</b> см. До {fmt_datetime(deadline)} не вернёшь — "
-        "чужие вклады пустят под секатор, а твоё имя останется в списке долбоёбов санации."
-    )
-
-
-def crisis_chat_summary(deadline: int, deposits: int, debtor_lines: list[str]) -> str:
-    debtors = "\n".join(debtor_lines) if debtor_lines else "• Должники попрятались или уже пусты."
-    return (
-        "🚨 <b>КОРПОРАЦИЯ ОБОСРАЛАСЬ: САНАЦИЯ</b>\n\n"
-        f"Вклады под угрозой: <b>{deposits}</b> см. До распила: {fmt_datetime(deadline)}.\n"
-        "Не вернут долги — незастрахованные вклады отрежут без наркоза.\n\n"
-        f"<b>Финансовые красавцы:</b>\n{debtors}"
     )
 
 

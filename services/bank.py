@@ -12,10 +12,15 @@ Money rules (kept deliberately simple but internally consistent):
 * Loan principal leaves the Corporation till and becomes liquid ``size``. A
   repayment refills the till; its interest slice is house profit. Interest grows
   the debt by calendar time and, when repaid or garnished, becomes Corporation
-  income. Past the due date the loan defaults and is recovered by garnishing
-  /dick gains and duel winnings.
-* Every group has an isolated Corporation. A 25% liquidity reserve limits risk;
-  failed withdrawals trigger a seven-day sanction and uninsured deposit bail-in.
+  income. Past the due date the loan defaults and is recovered from /dick gains,
+  duel winnings, and deposit principal regardless of either protection layer.
+* Every group has an isolated Corporation. A 25% liquidity reserve limits risk.
+  The first configured slice of each principal is protected without a policy;
+  active SЕКАСКО applies on top. A withdrawal the till cannot fund immediately
+  writes every claim down to those protected layers, pays the initiator from the
+  surviving principal (the till may go negative), and leaves new risk operations
+  frozen in recovery while preserved claims remain withdrawable. Accrued interest
+  and overdue-loan recovery are never protected.
 
 The pure helpers (rates, limits, penalties) take a config snapshot and are unit
 tested; the async ops below wrap them with repository IO. Callers that already hold
@@ -31,7 +36,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from aiogram.exceptions import TelegramAPIError
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.engine import get_session_factory
 from db.models import Deposit, DepositInsurance, Loan
@@ -161,6 +167,25 @@ class DepositView:
 
 
 @dataclass
+class SekaskoView:
+    active: int
+    base_limit: int
+    base_protected: int
+    sekasko_protected: int
+    total_protected: int
+    risky: int
+    unused: int
+    configured_limit: int
+    purchase_limit: int
+    limit_available: int
+    available: int
+    premium_pct: int
+    available_premium: int
+    next_expires_at: int
+    next_expiring: int
+
+
+@dataclass
 class LoanView:
     principal: int
     interest: int
@@ -195,12 +220,25 @@ class PisyagoResult:
 class BankSummary:
     size: int
     deposit: DepositView | None
+    sekasko: SekaskoView
     loan: LoanView | None
     loans_repaid: int
     loans_defaulted: int
     loan_limit: int
     pisyago: PisyagoView
     next_credit_reward_at: int = 0
+
+
+@dataclass(frozen=True)
+class DepositProtection:
+    base_limit: int
+    base: int
+    sekasko: int
+    total: int
+    risky: int
+    unused: int
+    issuance_limit: int
+    issuance_available: int
 
 
 @dataclass(frozen=True)
@@ -237,27 +275,75 @@ async def insured_principal(
 ) -> tuple[int, int]:
     now = _now() if now is None else now
     policies = await repo.active_insurance(chat_id, user_id, now)
-    amount = min(max(0, principal), sum(max(0, p.amount) for p in policies))
-    expiry = max((p.expires_at for p in policies), default=0)
-    return amount, expiry
+    amount, expiry, _ = _sekasko_coverage_schedule(policies)
+    protection = deposit_protection(principal, amount, get_config_sync())
+    return protection.total, expiry
+
+
+def sekasko_premium(amount: int, premium_pct: int) -> int:
+    """Return the premium charged for a new amount of deposit coverage."""
+    if amount <= 0:
+        return 0
+    return max(1, (amount * max(0, premium_pct) + 99) // 100)
+
+
+def _affordable_sekasko(size: int, premium_pct: int, limit: int) -> int:
+    """Maximum coverage whose rounded-up premium fits the liquid balance."""
+    if size < 1 or limit <= 0:
+        return 0
+    if premium_pct <= 0:
+        return limit
+    return min(limit, size * 100 // premium_pct)
+
+
+def _sekasko_coverage_schedule(policies: list) -> tuple[int, int, int]:
+    """Return active coverage and the first tranche that expires.
+
+    The configured limit controls new issuance only: lowering it must not
+    retroactively devalue an existing purchased or seasonal policy.
+    """
+    by_expiry: dict[int, int] = {}
+    for policy in policies:
+        amount = max(0, int(policy.amount))
+        if amount:
+            expires_at = int(policy.expires_at)
+            by_expiry[expires_at] = by_expiry.get(expires_at, 0) + amount
+    raw_total = sum(by_expiry.values())
+    if not by_expiry:
+        return 0, 0, 0
+    expires_at = min(by_expiry)
+    return raw_total, expires_at, by_expiry[expires_at]
+
+
+def _risk_free_principal(cfg: GlobalConfig) -> int:
+    # The migration/config worker adds the field. The fallback keeps this task
+    # branch executable before those independently owned changes are integrated.
+    return max(0, int(getattr(cfg, "dep_risk_free_principal", 50)))
+
+
+def deposit_protection(principal: int, active_sekasko: int, cfg: GlobalConfig) -> DepositProtection:
+    principal = max(0, int(principal))
+    active_sekasko = max(0, int(active_sekasko))
+    base_limit = _risk_free_principal(cfg)
+    base = min(principal, base_limit)
+    principal_above_base = max(0, principal - base)
+    sekasko = min(active_sekasko, principal_above_base)
+    total = base + sekasko
+    issuance_limit = min(max(0, principal - base_limit), max(0, int(cfg.sekasko_max_coverage)))
+    return DepositProtection(
+        base_limit=base_limit,
+        base=base,
+        sekasko=sekasko,
+        total=total,
+        risky=max(0, principal - total),
+        unused=max(0, active_sekasko - principal_above_base),
+        issuance_limit=issuance_limit,
+        issuance_available=max(0, issuance_limit - active_sekasko),
+    )
 
 
 def required_reserve(liability: int, cfg: GlobalConfig) -> int:
     return max(0, liability) * cfg.corp_liquidity_reserve_pct // 100
-
-
-async def _start_sanation(chat_id: int) -> None:
-    corp = await repo.get_corp(chat_id)
-    if corp.status != "healthy":
-        return
-    now = _now()
-    cfg = get_config_sync()
-    await repo.set_corp_fields(
-        chat_id,
-        status="sanation",
-        sanation_started_at=now,
-        sanation_deadline=now + cfg.corp_sanation_days * DAY,
-    )
 
 
 async def get_summary(chat_id: int, user_id: int) -> BankSummary:
@@ -267,26 +353,52 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
     repaid = player.loans_repaid if player else 0
     defaulted_n = player.loans_defaulted if player else 0
 
+    now = _now()
+    policies = await repo.active_insurance(chat_id, user_id, now)
+    configured_limit = max(0, cfg.sekasko_max_coverage)
+    active_coverage, next_expires_at, next_expiring = _sekasko_coverage_schedule(policies)
+
     dep_row = await repo.get_deposit(chat_id, user_id)
     dep_view = None
-    if dep_row is not None and dep_row.principal > 0:
-        insured, insurance_expires_at = await insured_principal(chat_id, user_id, dep_row.principal)
+    principal = max(0, int(dep_row.principal)) if dep_row is not None else 0
+    protection = deposit_protection(principal, active_coverage, cfg)
+    if dep_row is not None and principal > 0:
         dep_view = DepositView(
-            principal=dep_row.principal,
+            principal=principal,
             accrued=dep_row.accrued,
             matures_at=dep_row.matures_at,
-            matured=_now() >= dep_row.matures_at,
+            matured=now >= dep_row.matures_at,
             active_days=dep_row.active_days_count,
-            insured=insured,
-            insurance_expires_at=insurance_expires_at,
+            insured=protection.sekasko,
+            insurance_expires_at=next_expires_at,
         )
+
+    purchase_limit = protection.issuance_limit
+    limit_available = protection.issuance_available
+    available = _affordable_sekasko(size, cfg.sekasko_premium_pct, limit_available)
+    sekasko = SekaskoView(
+        active=active_coverage,
+        base_limit=protection.base_limit,
+        base_protected=protection.base,
+        sekasko_protected=protection.sekasko,
+        total_protected=protection.total,
+        risky=protection.risky,
+        unused=protection.unused,
+        configured_limit=configured_limit,
+        purchase_limit=purchase_limit,
+        limit_available=limit_available,
+        available=available,
+        premium_pct=max(0, cfg.sekasko_premium_pct),
+        available_premium=sekasko_premium(available, cfg.sekasko_premium_pct),
+        next_expires_at=next_expires_at,
+        next_expiring=next_expiring,
+    )
 
     poker_stack = await poker_repo.get_money_stack(chat_id, user_id)
     deposit_assets = (
         dep_row.principal + dep_row.accrued if dep_row is not None and dep_row.principal > 0 else 0
     )
     assets = max(0, size) + deposit_assets + poker_stack
-    now = _now()
     window_active = bool(player and player.insurance_reset_at > now)
     used = max(0, int(player.insurance_used)) if window_active and player else 0
     insurance_limit = max(0, cfg.dick_insurance_limit)
@@ -324,6 +436,7 @@ async def get_summary(chat_id: int, user_id: int) -> BankSummary:
     return BankSummary(
         size=size,
         deposit=dep_view,
+        sekasko=sekasko,
         loan=loan_view,
         loans_repaid=repaid,
         loans_defaulted=defaulted_n,
@@ -348,9 +461,20 @@ class BankError(Exception):
 
 
 @dataclass
+class BailInInfo:
+    wiped: int
+    protected_claims: int
+    payout: int
+    balance: int
+    deficit: int
+    status: str
+
+
+@dataclass
 class OpResult:
     amount: int
     extra: int = 0  # penalty / interest / forfeit, depending on the op
+    bail_in: BailInInfo | None = None
 
 
 async def apply_pisyago_on_dict(chat_id: int, user_id: int, loss: int) -> PisyagoResult:
@@ -446,10 +570,11 @@ async def buy_sekasko(chat_id: int, user_id: int, amount: int) -> OpResult:
                     DepositInsurance.expires_at > _now(),
                 )
             )
-            available = min(dep.principal, cfg.sekasko_max_coverage) - int(insured or 0)
+            protection = deposit_protection(dep.principal, int(insured or 0), cfg)
+            available = protection.issuance_available
             if amount < 1 or amount > available:
                 raise BankError("insurance_limit")
-            premium = max(1, (amount * cfg.sekasko_premium_pct + 99) // 100)
+            premium = sekasko_premium(amount, cfg.sekasko_premium_pct)
             player = await players_repo.get_player_in(session, chat_id, user_id)
             if player is None or player.size < premium:
                 raise BankError("insurance_cash")
@@ -483,6 +608,129 @@ async def buy_sekasko(chat_id: int, user_id: int, amount: int) -> OpResult:
                 meta={"insured": amount, "premium": premium, "expires_at": expires_at},
             )
             return OpResult(amount=amount, extra=premium)
+
+
+def _purchased_insurance_filter(chat_id: int, user_id: int):
+    """Select disposable policies while preserving active seasonal prizes.
+
+    ``source`` is supplied by the season-prize migration. Keeping the fallback
+    makes rolling code upgrades safe before that migration is present.
+    """
+    clauses = [
+        DepositInsurance.chat_id == chat_id,
+        DepositInsurance.user_id == user_id,
+    ]
+    source = getattr(DepositInsurance, "source", None)
+    if source is not None:
+        clauses.append(or_(source != "season_prize", DepositInsurance.expires_at <= _now()))
+    return clauses
+
+
+async def _active_insurance_amounts_in(
+    session: AsyncSession, chat_id: int, user_ids: list[int], now: int
+) -> dict[int, int]:
+    if not user_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                DepositInsurance.user_id,
+                func.coalesce(func.sum(DepositInsurance.amount), 0),
+            )
+            .where(
+                DepositInsurance.chat_id == chat_id,
+                DepositInsurance.user_id.in_(user_ids),
+                DepositInsurance.expires_at > now,
+            )
+            .group_by(DepositInsurance.user_id)
+        )
+    ).all()
+    return {int(user_id): int(amount) for user_id, amount in rows}
+
+
+async def _bail_in_in(
+    session: AsyncSession,
+    chat_id: int,
+    now: int,
+    cfg: GlobalConfig,
+    *,
+    initiator_user_id: int = 0,
+) -> BailInInfo:
+    """Atomically reduce every claim to base + active SЕКАСКО protection."""
+    corp = await repo.ensure_corp_in(session, chat_id)
+    deposits = list(
+        (await session.execute(select(Deposit).where(Deposit.chat_id == chat_id))).scalars()
+    )
+    insured = await _active_insurance_amounts_in(
+        session, chat_id, [dep.user_id for dep in deposits], now
+    )
+    wiped = 0
+    protected_claims = 0
+    for dep in deposits:
+        protection = deposit_protection(dep.principal, insured.get(dep.user_id, 0), cfg)
+        wiped += max(0, int(dep.accrued)) + protection.risky
+        protected_claims += protection.total
+        if protection.total <= 0:
+            await session.delete(dep)
+            await session.execute(
+                delete(DepositInsurance).where(*_purchased_insurance_filter(chat_id, dep.user_id))
+            )
+        else:
+            dep.principal = protection.total
+            dep.accrued = 0
+            dep.interest_remainder_ppm = 0
+
+    deficit = max(
+        0,
+        -int(corp.balance),
+        protected_claims - (int(corp.balance) + int(corp.insurance_reserve)),
+    )
+    status = "recovery" if deficit > 0 else "healthy"
+    corp.status = status
+    corp.sanation_started_at = 0
+    corp.sanation_deadline = 0
+    return BailInInfo(
+        wiped=wiped,
+        protected_claims=protected_claims,
+        payout=0,
+        balance=int(corp.balance),
+        deficit=deficit,
+        status=status,
+    )
+
+
+async def _record_bail_in_in(
+    session: AsyncSession,
+    chat_id: int,
+    info: BailInInfo,
+    *,
+    initiator_user_id: int = 0,
+    force: bool = False,
+) -> None:
+    """Book one global bail-in after its final payout state is known."""
+    if info.wiped <= 0 and not force:
+        return
+    corp = await repo.ensure_corp_in(session, chat_id)
+    corp.bankruptcy_count += 1
+    meta = {
+        "wiped": info.wiped,
+        "protected": info.protected_claims,
+        "payout": info.payout,
+        "balance": info.balance,
+        "deficit": info.deficit,
+        "status": info.status,
+        "initiator_user_id": initiator_user_id,
+    }
+    await repo.corp_apply_in(
+        session,
+        chat_id,
+        delta=0,
+        bailin=info.wiped,
+        reason="bailin",
+        user_id=initiator_user_id,
+        meta=meta,
+    )
+    E.add_event(session, chat_id, 0, E.CORP_BAILIN, meta=meta)
 
 
 async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
@@ -533,74 +781,143 @@ async def open_deposit(chat_id: int, user_id: int, amount: int) -> OpResult:
 
 async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> OpResult:
     """Withdraw ``amount`` of principal (None = all). Returns the credited amount
-    and the penalty+forfeited interest withheld by the Corporation."""
+    and the penalty+forfeited interest withheld by the Corporation.
+
+    A healthy Corporation that cannot fund the withdrawal and its remaining
+    reserve performs one atomic immediate bail-in first. Recovery withdrawals
+    never trigger another bail-in or reserve check.
+    """
     cfg = get_config_sync()
     async with players_repo.get_chat_lock(chat_id), repo.corp_lock(chat_id):
         factory = get_session_factory()
         async with factory() as session, session.begin():
             corp = await repo.ensure_corp_in(session, chat_id)
-            if corp.status != "healthy":
+            if corp.status not in {"healthy", "recovery"}:
                 raise BankError("corp_frozen")
             dep = await session.get(Deposit, (chat_id, user_id))
             if dep is None or dep.principal <= 0:
                 raise BankError("no_deposit")
-            w = dep.principal if amount is None else max(1, min(amount, dep.principal))
+
+            requested = dep.principal if amount is None else max(1, min(amount, dep.principal))
+            w = requested
             accrued_share = dep.accrued * w // dep.principal
             matured = _now() >= dep.matures_at
             penalty = 0 if matured else (w * cfg.dep_early_penalty_pct + 99) // 100
             credited = w + accrued_share if matured else max(0, w - penalty)
-            cash_delta = -credited
-            liability = await repo.deposit_liability_in(session, chat_id)
-            remaining_liability = max(0, liability - w - accrued_share)
-            if corp.balance + cash_delta < required_reserve(remaining_liability, cfg):
-                corp.status = "sanation"
-                corp.sanation_started_at = _now()
-                corp.sanation_deadline = _now() + cfg.corp_sanation_days * DAY
-                E.add_event(
-                    session,
-                    chat_id,
-                    0,
-                    E.CORP_SANATION,
-                    meta={"deadline": corp.sanation_deadline},
-                )
-                # Commit the crisis transition, but none of the withdrawal.
-                await session.commit()
-                raise BankError("corp_sanation")
+
+            bail_in = None
+            if corp.status == "healthy":
+                liability = await repo.deposit_liability_in(session, chat_id)
+                remaining_liability = max(0, liability - w - accrued_share)
+                if corp.balance - credited < required_reserve(remaining_liability, cfg):
+                    bail_in = await _bail_in_in(
+                        session,
+                        chat_id,
+                        _now(),
+                        cfg,
+                        initiator_user_id=user_id,
+                    )
+                    dep = await session.get(Deposit, (chat_id, user_id))
+                    if dep is None or dep.principal <= 0:
+                        w = 0
+                        accrued_share = 0
+                        matured = True
+                        penalty = 0
+                        credited = 0
+                    else:
+                        w = min(requested, dep.principal)
+                        accrued_share = dep.accrued * w // dep.principal
+                        matured = _now() >= dep.matures_at
+                        penalty = 0 if matured else (w * cfg.dep_early_penalty_pct + 99) // 100
+                        credited = w + accrued_share if matured else max(0, w - penalty)
+
+            player = await players_repo.ensure_player_in(session, chat_id, user_id)
+            player.size += credited
+            new_size = player.size
+            if dep is not None and dep.principal > 0:
+                rem_principal = dep.principal - w
+                rem_accrued = dep.accrued - accrued_share
+                rem_remainder = dep.interest_remainder_ppm * rem_principal // dep.principal
+                if rem_principal <= 0:
+                    await session.delete(dep)
+                    await session.execute(
+                        delete(DepositInsurance).where(
+                            *_purchased_insurance_filter(chat_id, user_id)
+                        )
+                    )
+                else:
+                    dep.principal = rem_principal
+                    dep.accrued = max(0, rem_accrued)
+                    dep.interest_remainder_ppm = max(0, rem_remainder)
+
+            await session.flush()
+            remaining_liability = await repo.deposit_liability_in(session, chat_id)
+            final_balance = int(corp.balance) - credited
+            deficit = max(
+                0,
+                -final_balance,
+                remaining_liability - (final_balance + int(corp.insurance_reserve)),
+            )
+            if bail_in is not None or corp.status == "recovery":
+                corp.status = "recovery" if deficit > 0 else "healthy"
+                corp.sanation_started_at = 0
+                corp.sanation_deadline = 0
+
+            bail_meta = None
+            if bail_in is not None:
+                bail_in.payout = credited
+                bail_in.balance = final_balance
+                bail_in.deficit = deficit
+                bail_in.status = corp.status
+                bail_meta = {
+                    "wiped": bail_in.wiped,
+                    "protected": bail_in.protected_claims,
+                    "payout": credited,
+                    "balance": final_balance,
+                    "deficit": deficit,
+                    "status": corp.status,
+                }
+
+            withdraw_meta = {
+                "matured": matured,
+                "penalty": penalty,
+                "interest": accrued_share,
+                "requested": requested,
+                "principal_withdrawn": w,
+                "payout": credited,
+                "balance": final_balance,
+                "deficit": deficit,
+                "bail_in": bail_meta,
+            }
             await repo.corp_apply_in(
                 session,
                 chat_id,
-                delta=cash_delta,
+                delta=-credited,
                 penalties=0 if matured else penalty + accrued_share,
                 reason="deposit_withdraw",
                 user_id=user_id,
-                meta={"matured": matured, "penalty": penalty, "interest": accrued_share},
+                meta=withdraw_meta,
             )
+            if bail_in is not None:
+                await _record_bail_in_in(
+                    session,
+                    chat_id,
+                    bail_in,
+                    initiator_user_id=user_id,
+                    force=True,
+                )
             if not matured and (penalty or accrued_share):
                 E.add_event(
                     session,
                     chat_id,
                     user_id,
                     E.DEPOSIT_PENALTY,
-                    meta={"penalty": penalty, "forfeit_interest": accrued_share},
+                    meta={
+                        "penalty": penalty,
+                        "forfeit_interest": accrued_share,
+                        "bail_in": bail_meta,
+                    },
                 )
-            rem_principal = dep.principal - w
-            rem_accrued = dep.accrued - accrued_share
-            rem_remainder = dep.interest_remainder_ppm * rem_principal // dep.principal
-            player = await players_repo.ensure_player_in(session, chat_id, user_id)
-            player.size += credited
-            new_size = player.size
-            if rem_principal <= 0:
-                await session.delete(dep)
-                await session.execute(
-                    delete(DepositInsurance).where(
-                        DepositInsurance.chat_id == chat_id,
-                        DepositInsurance.user_id == user_id,
-                    )
-                )
-            else:
-                dep.principal = rem_principal
-                dep.accrued = max(0, rem_accrued)
-                dep.interest_remainder_ppm = max(0, rem_remainder)
             E.add_event(
                 session,
                 chat_id,
@@ -608,8 +925,14 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
                 E.DEPOSIT_WITHDRAW,
                 delta=credited,
                 size_after=new_size,
+                meta=withdraw_meta,
             )
-    return OpResult(amount=credited, extra=penalty + (0 if matured else accrued_share))
+
+    return OpResult(
+        amount=credited,
+        extra=penalty + (0 if matured else accrued_share),
+        bail_in=bail_in,
+    )
 
 
 async def accrue_deposit_on_play(chat_id: int, user_id: int, today: str) -> int:
@@ -1099,49 +1422,59 @@ async def roll_confiscation(
 
     ``today`` (UTC ISO date) gates the roll to at most one attempt per calendar day
     so the chance is per-day, not per-collector-run (the loop can fire hourly)."""
-    if dep.principal <= 0 or cfg.dep_confisc_chance_pct <= 0:
-        return 0
-    if today and dep.last_confisc_day == today:
+    if cfg.dep_confisc_chance_pct <= 0:
         return 0
     r = rng or random
-    fired = r.random() < cfg.dep_confisc_chance_pct / 100
-    # Mark the day as rolled whether or not it fired, so a missed roll isn't
-    # retried on the next run within the same day.
-    if today and not fired:
-        await repo.upsert_deposit(dep.chat_id, dep.user_id, last_confisc_day=today)
-        return 0
-    if not fired:
-        return 0
-    insured, _ = await insured_principal(dep.chat_id, dep.user_id, dep.principal)
-    exposed = max(0, dep.principal - insured)
-    frac = r.uniform(0, cfg.dep_confisc_max_pct / 100)
-    seized = int(exposed * frac)
-    if seized <= 0:
-        if today:
-            await repo.upsert_deposit(dep.chat_id, dep.user_id, last_confisc_day=today)
-        return 0
-    rem_principal = dep.principal - seized
-    await repo.upsert_deposit(
-        dep.chat_id,
-        dep.user_id,
-        principal=rem_principal,
-        interest_remainder_ppm=(dep.interest_remainder_ppm * rem_principal // dep.principal),
-        last_confisc_day=today,
-    )
-    # The seized cash is already sitting in the till (deposits fund it). We only
-    # shrink the depositor's claim and book it as house earnings — no cash moves.
-    await repo.corp_apply(
-        dep.chat_id,
-        delta=0,
-        penalties=seized,
-        reason="confiscation",
-        user_id=dep.user_id,
-        meta={"seized": seized},
-    )
-    await E.log_event(
-        dep.chat_id, dep.user_id, E.CONFISCATION, delta=-seized, meta={"seized": seized}
-    )
-    return seized
+    async with players_repo.get_chat_lock(dep.chat_id), repo.corp_lock(dep.chat_id):
+        factory = get_session_factory()
+        async with factory() as session, session.begin():
+            row = await session.get(Deposit, (dep.chat_id, dep.user_id))
+            if row is None or row.principal <= 0:
+                return 0
+            corp = await repo.ensure_corp_in(session, dep.chat_id)
+            if corp.status != "healthy":
+                return 0
+            if today and row.last_confisc_day == today:
+                return 0
+
+            fired = r.random() < cfg.dep_confisc_chance_pct / 100
+            # Consume the day's roll even on a miss, in the same transaction as
+            # every possible claim/counter/event mutation.
+            if today:
+                row.last_confisc_day = today
+            if not fired:
+                return 0
+
+            insured = await _active_insurance_amounts_in(
+                session, dep.chat_id, [dep.user_id], _now()
+            )
+            protection = deposit_protection(row.principal, insured.get(dep.user_id, 0), cfg)
+            frac = r.uniform(0, cfg.dep_confisc_max_pct / 100)
+            seized = int(protection.risky * frac)
+            if seized <= 0:
+                return 0
+
+            rem_principal = row.principal - seized
+            row.interest_remainder_ppm = row.interest_remainder_ppm * rem_principal // row.principal
+            row.principal = rem_principal
+            await repo.corp_apply_in(
+                session,
+                dep.chat_id,
+                delta=0,
+                penalties=seized,
+                reason="confiscation",
+                user_id=dep.user_id,
+                meta={"seized": seized, "protected": protection.total},
+            )
+            E.add_event(
+                session,
+                dep.chat_id,
+                dep.user_id,
+                E.CONFISCATION,
+                delta=-seized,
+                meta={"seized": seized, "protected": protection.total},
+            )
+            return seized
 
 
 # --------------------------------------------------------------------------- #
@@ -1232,124 +1565,63 @@ async def run_collector_pass(bot) -> None:
             await _maybe_remind(bot, fresh, cfg, now)
 
     for dep in await repo.all_deposits():
-        async with players_repo.get_chat_lock(dep.chat_id):
-            fresh = await repo.get_deposit(dep.chat_id, dep.user_id)
-            corp = await repo.get_corp(dep.chat_id)
-            if fresh is not None and fresh.principal > 0 and corp.status == "healthy":
-                await roll_confiscation(fresh, cfg, today)
+        await roll_confiscation(dep, cfg, today)
 
     await _run_corporation_crises(bot, now)
 
 
-async def _insured_total(chat_id: int, deposits: list, now: int | None = None) -> int:
-    now = _now() if now is None else now
-    amounts = await repo.insured_amounts(chat_id, [dep.user_id for dep in deposits], now)
-    return sum(min(max(0, dep.principal), amounts.get(dep.user_id, 0)) for dep in deposits)
-
-
-async def _bail_in(chat_id: int, now: int) -> int:
-    """Wipe accrued and uninsured deposit claims without minting cash."""
-    wiped = 0
-    deposits = await repo.chat_deposits(chat_id)
-    insured = await repo.insured_amounts(chat_id, [dep.user_id for dep in deposits], now)
-    for dep in deposits:
-        covered = min(max(0, dep.principal), insured.get(dep.user_id, 0))
-        wiped += dep.accrued + max(0, dep.principal - covered)
-        if covered <= 0:
-            await repo.delete_deposit(chat_id, dep.user_id)
-            await repo.delete_insurance_for_deposit(chat_id, dep.user_id)
-        else:
-            await repo.upsert_deposit(
-                chat_id,
-                dep.user_id,
-                principal=covered,
-                accrued=0,
-                interest_remainder_ppm=0,
-            )
-    corp = await repo.get_corp(chat_id)
-    preserved = await repo.deposit_liability(chat_id)
-    status = "healthy" if preserved <= corp.balance + corp.insurance_reserve else "recovery"
-    await repo.set_corp_fields(
-        chat_id,
-        status=status,
-        sanation_started_at=0,
-        sanation_deadline=0,
-        bankruptcy_count=corp.bankruptcy_count + 1,
-    )
-    await repo.corp_apply(
-        chat_id,
-        delta=0,
-        bailin=wiped,
-        reason="bailin",
-        meta={"wiped": wiped, "preserved": preserved, "status": status},
-    )
-    await E.log_event(chat_id, 0, E.CORP_BAILIN, meta={"wiped": wiped, "preserved": preserved})
-    return wiped
+async def _bail_in(chat_id: int, now: int) -> BailInInfo:
+    """Transactional wrapper for collector resolution of a legacy sanation."""
+    cfg = get_config_sync()
+    async with players_repo.get_chat_lock(chat_id), repo.corp_lock(chat_id):
+        factory = get_session_factory()
+        async with factory() as session, session.begin():
+            info = await _bail_in_in(session, chat_id, now, cfg)
+            await _record_bail_in_in(session, chat_id, info, force=True)
+            return info
 
 
 async def _run_corporation_crises(bot, now: int) -> None:
-    """Advance local seven-day sanctions and send one crude daily pressure wave."""
-    import html
-
+    """Resolve legacy sanation and recovery states without deadline reminders."""
     import texts
     from repositories import threads as threads_repo
 
-    for corp in await repo.all_corps():
-        if corp.status == "healthy":
+    cfg = get_config_sync()
+    for snapshot in await repo.all_corps():
+        if snapshot.status == "healthy":
             continue
-        deposits = await repo.chat_deposits(corp.chat_id)
-        liability = sum(d.principal + d.accrued for d in deposits)
-        insured = await _insured_total(corp.chat_id, deposits, now)
-        uninsured = max(0, liability - insured)
-        can_cover = corp.balance >= uninsured and corp.balance + corp.insurance_reserve >= liability
-        if can_cover:
-            await repo.set_corp_fields(
-                corp.chat_id, status="healthy", sanation_started_at=0, sanation_deadline=0
-            )
-            continue
-        if corp.status == "sanation" and now >= corp.sanation_deadline:
-            await _bail_in(corp.chat_id, now)
-            continue
-        if now - corp.last_crisis_notice_at < DAY:
-            continue
-        loans = await repo.chat_loans(corp.chat_id)
-        lines = []
-        player_names = {
-            player.user_id: player.name for player in await players_repo.list_players(corp.chat_id)
-        }
-        for loan in loans:
-            debt = loan.principal + loan.accrued_interest
-            if debt <= 0:
-                continue
-            name = html.escape(player_names.get(loan.user_id) or str(loan.user_id))
-            lines.append(f'• <a href="tg://user?id={loan.user_id}">{name}</a>: {debt} см')
+        legacy_info = None
+        async with players_repo.get_chat_lock(snapshot.chat_id), repo.corp_lock(snapshot.chat_id):
+            factory = get_session_factory()
+            async with factory() as session, session.begin():
+                corp = await repo.ensure_corp_in(session, snapshot.chat_id)
+                if corp.status == "sanation":
+                    legacy_info = await _bail_in_in(session, snapshot.chat_id, now, cfg)
+                    await _record_bail_in_in(session, snapshot.chat_id, legacy_info, force=True)
+                elif corp.status == "recovery":
+                    liability = await repo.deposit_liability_in(session, snapshot.chat_id)
+                    deficit = max(
+                        0,
+                        -int(corp.balance),
+                        liability - (int(corp.balance) + int(corp.insurance_reserve)),
+                    )
+                    if deficit <= 0:
+                        corp.status = "healthy"
+                        corp.sanation_started_at = 0
+                        corp.sanation_deadline = 0
+        if legacy_info is not None:
             try:
+                thread_id, _reason = await threads_repo.resolve_thread(snapshot.chat_id)
                 await bot.send_message(
-                    loan.user_id,
-                    texts.crisis_debtor_reminder(debt, corp.sanation_deadline),
+                    snapshot.chat_id,
+                    texts.bank_legacy_bail_in_notice(
+                        legacy_info.wiped,
+                        legacy_info.protected_claims,
+                        legacy_info.balance,
+                        legacy_info.deficit,
+                    ),
                     parse_mode="HTML",
+                    message_thread_id=thread_id,
                 )
             except TelegramAPIError:
                 pass
-        text = texts.crisis_chat_summary(corp.sanation_deadline, liability, lines)
-        try:
-            thread_id, _reason = await threads_repo.resolve_thread(corp.chat_id)
-            if corp.crisis_message_id:
-                await bot.edit_message_text(
-                    text,
-                    chat_id=corp.chat_id,
-                    message_id=corp.crisis_message_id,
-                    parse_mode="HTML",
-                )
-            else:
-                message = await bot.send_message(
-                    corp.chat_id, text, parse_mode="HTML", message_thread_id=thread_id
-                )
-                await repo.set_corp_fields(
-                    corp.chat_id,
-                    crisis_message_id=message.message_id,
-                    crisis_thread_id=thread_id or 0,
-                )
-        except TelegramAPIError:
-            pass
-        await repo.set_corp_fields(corp.chat_id, last_crisis_notice_at=now)

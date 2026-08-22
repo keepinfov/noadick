@@ -6,7 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The top three players of each completed chat season receive 10 centimetres of
+  SЕКАСКО coverage for a fixed seven days measured from the season end, not a
+  later finalization. Prize coverage can wait for a future deposit and never
+  becomes liquid size.
+- The bank has a dedicated SЕКАСКО screen with base, policy, protected, risky,
+  premium, purchase-headroom, and nearest-expiry details.
+
 ### Changed
+
+- Controlled positive `/dick` emission is reduced from 3 to 2 centimetres.
+- The first 50 centimetres of deposit principal are protected without a policy;
+  active SЕКАСКО protects up to 100 additional centimetres on top. Accrued
+  interest and overdue-loan recovery remain outside both protection layers.
+- An unfundable withdrawal now triggers an immediate, atomic bail-in across all
+  deposits without a grace period, then pays the initiator from surviving
+  principal even if the Corporation balance becomes negative. This can write
+  down every depositor's accrued interest and risky principal immediately; the
+  normal early-withdrawal penalty still applies to surviving principal.
+- Recovery keeps preserved claims withdrawable while freezing new deposits,
+  loans, and SЕКАСКО until both the operating balance and stored liabilities are
+  funded again.
 
 ### Fixed
 

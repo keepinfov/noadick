@@ -567,6 +567,28 @@ async def test_finalization_awards_configured_sekasko_prizes_before_a_deposit(
     assert len(all_policies) == 4
     assert len(all_prizes) == 2
 
+    # Closing a deposit disposes purchased coverage, but the free seasonal
+    # policy waits for a later deposit until its fixed expiry.
+    await bank.withdraw_deposit(chat_id, 41, None)
+    async with factory() as session:
+        surviving = list(
+            (
+                await session.execute(
+                    select(DepositInsurance).where(
+                        DepositInsurance.chat_id == chat_id,
+                        DepositInsurance.user_id == 41,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert [(value.source, value.amount) for value in surviving] == [("season_prize", 5)]
+
+    await players.set_player_fields(chat_id, 41, size=100)
+    await bank.open_deposit(chat_id, 41, 60)
+    assert await bank.insured_principal(chat_id, 41, 60, now=close + 2) == (55, expires_at)
+
 
 async def test_season_prize_and_archive_roll_back_together(
     db, monkeypatch: pytest.MonkeyPatch

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -587,7 +589,7 @@ async def test_qualified_three_day_loan_bumps_history_once_per_window(db, monkey
     assert (await players_repo.get_player(CHAT, USER)).loans_repaid == 1
 
 
-async def test_sekasko_premium_is_ringfenced_and_bailin_preserves_only_body(db):
+async def test_shortfall_bails_in_then_pays_protected_body_with_early_penalty(db):
     from repositories import bank as repo
     from repositories import players as players_repo
     from services import bank
@@ -602,15 +604,332 @@ async def test_sekasko_premium_is_ringfenced_and_bailin_preserves_only_body(db):
 
     await repo.upsert_deposit(CHAT, USER, accrued=7)
     await repo.corp_apply(CHAT, delta=-100)
-    with pytest.raises(bank.BankError) as error:
-        await bank.withdraw_deposit(CHAT, USER, None)
-    assert error.value.code == "corp_sanation"
-    await bank._bail_in(CHAT, bank._now())
-    dep = await repo.get_deposit(CHAT, USER)
-    assert (dep.principal, dep.accrued) == (40, 0)
+    result = await bank.withdraw_deposit(CHAT, USER, None)
+
+    assert result.bail_in is not None
+    assert result.bail_in.wiped == 17  # 7 interest + 10 risky principal
+    assert result.extra == 27  # early penalty is applied to surviving 90 principal
+    assert result.amount == 63
+    assert result.bail_in.payout == 63
+    assert result.bail_in.balance == -63
+    assert result.bail_in.deficit == 63
+    assert await repo.get_deposit(CHAT, USER) is None
     corp = await repo.get_corp(CHAT)
     assert corp.status == "recovery"
-    assert corp.total_bailin == 67
+    assert corp.total_bailin == 17
+    assert corp.bankruptcy_count == 1
+
+
+async def test_sekasko_summary_keeps_active_coverage_without_deposit(db, monkeypatch):
+    from repositories import bank as repo
+    from services import bank
+
+    now = 2_000_000
+    monkeypatch.setattr(bank, "_now", lambda: now)
+    await _seed_player(1)
+    await repo.add_insurance(CHAT, USER, amount=7, premium=0, expires_at=now + 2 * bank.DAY)
+    await repo.add_insurance(CHAT, USER, amount=5, premium=0, expires_at=now + bank.DAY)
+
+    without_deposit = await bank.get_summary(CHAT, USER)
+    assert without_deposit.deposit is None
+    assert without_deposit.sekasko.active == 12
+    assert without_deposit.sekasko.total_protected == 0
+    assert without_deposit.sekasko.unused == 12
+    assert without_deposit.sekasko.next_expires_at == now + bank.DAY
+    assert without_deposit.sekasko.next_expiring == 5
+    assert without_deposit.sekasko.available == 0
+
+    await bank.open_deposit(CHAT, USER, 1)
+    with_deposit = await bank.get_summary(CHAT, USER)
+    assert with_deposit.sekasko.base_protected == 1
+    assert with_deposit.sekasko.sekasko_protected == 0
+    assert with_deposit.sekasko.total_protected == 1
+    assert with_deposit.sekasko.risky == 0
+    assert with_deposit.sekasko.unused == 12
+
+
+def test_sekasko_premium_and_affordability_use_same_rounding():
+    from services import bank
+
+    assert bank.sekasko_premium(1, 5) == 1
+    assert bank.sekasko_premium(20, 5) == 1
+    assert bank.sekasko_premium(21, 5) == 2
+    assert bank._affordable_sekasko(size=1, premium_pct=5, limit=40) == 20
+    assert bank._affordable_sekasko(size=0, premium_pct=5, limit=40) == 0
+
+
+def test_sekasko_schedule_reports_the_first_expiring_tranche_without_retroactive_cap():
+    from services import bank
+
+    policies = [
+        SimpleNamespace(amount=10, expires_at=100),
+        SimpleNamespace(amount=35, expires_at=200),
+        SimpleNamespace(amount=5, expires_at=300),
+    ]
+
+    assert bank._sekasko_coverage_schedule(policies) == (50, 100, 10)
+
+
+@pytest.mark.parametrize(
+    ("principal", "base", "sekasko", "total", "risky", "unused", "issuance"),
+    [
+        (30, 30, 0, 30, 0, 100, 0),
+        (50, 50, 0, 50, 0, 100, 0),
+        (120, 50, 70, 120, 0, 30, 70),
+        (150, 50, 100, 150, 0, 0, 100),
+        (180, 50, 100, 150, 30, 0, 100),
+    ],
+)
+def test_deposit_protection_layers_base_and_sekasko_on_top(
+    principal: int,
+    base: int,
+    sekasko: int,
+    total: int,
+    risky: int,
+    unused: int,
+    issuance: int,
+) -> None:
+    from services import bank
+
+    c = replace(cfg(), sekasko_max_coverage=100)
+    value = bank.deposit_protection(principal, active_sekasko=100, cfg=c)
+
+    assert (value.base, value.sekasko, value.total, value.risky) == (
+        base,
+        sekasko,
+        total,
+        risky,
+    )
+    assert value.unused == unused
+    assert value.issuance_limit == issuance
+
+
+def test_sekasko_purchase_headroom_starts_above_base_and_subtracts_active_contracts():
+    from services import bank
+
+    c = replace(cfg(), sekasko_max_coverage=100)
+    assert bank.deposit_protection(120, active_sekasko=20, cfg=c).issuance_available == 50
+    assert bank.deposit_protection(30, active_sekasko=20, cfg=c).issuance_available == 0
+
+
+async def test_base_only_crisis_is_audited_once_even_when_nothing_is_wiped(db):
+    from sqlalchemy import func, select
+
+    from db.engine import get_session_factory
+    from db.models import CorporationLedger, Event
+    from repositories import bank as repo
+    from repositories import events as events_repo
+    from services import bank
+
+    await _seed_player(100)
+    await bank.open_deposit(CHAT, USER, 30)
+    await repo.upsert_deposit(CHAT, USER, matures_at=0)
+    await repo.corp_apply(CHAT, delta=-30)
+
+    result = await bank.withdraw_deposit(CHAT, USER, None)
+
+    assert result.amount == 30
+    assert result.bail_in is not None
+    assert (result.bail_in.wiped, result.bail_in.balance, result.bail_in.deficit) == (
+        0,
+        -30,
+        30,
+    )
+    corp = await repo.get_corp(CHAT)
+    assert (corp.bankruptcy_count, corp.total_bailin, corp.status) == (1, 0, "recovery")
+
+    factory = get_session_factory()
+    async with factory() as session:
+        ledgers = list(
+            (
+                await session.execute(
+                    select(CorporationLedger).where(
+                        CorporationLedger.chat_id == CHAT,
+                        CorporationLedger.reason == "bailin",
+                    )
+                )
+            ).scalars()
+        )
+        event_count = await session.scalar(
+            select(func.count(Event.id)).where(
+                Event.chat_id == CHAT,
+                Event.type == events_repo.CORP_BAILIN,
+            )
+        )
+        sanation_count = await session.scalar(
+            select(func.count(Event.id)).where(
+                Event.chat_id == CHAT,
+                Event.type == events_repo.CORP_SANATION,
+            )
+        )
+    assert len(ledgers) == 1
+    assert ledgers[0].meta["payout"] == 30
+    assert ledgers[0].meta["balance"] == -30
+    assert event_count == 1
+    assert sanation_count == 0
+
+
+async def test_bail_in_cuts_all_depositors_and_keeps_raw_contracts_above_current_cap(db):
+    from repositories import bank as repo
+    from repositories import players as players_repo
+    from services import bank
+
+    other = USER + 1
+    await _seed_player(0)
+    await players_repo.set_player_fields(CHAT, other, size=0)
+    await repo.upsert_deposit(CHAT, USER, principal=180, accrued=5)
+    await repo.upsert_deposit(CHAT, other, principal=120, accrued=7)
+    await repo.add_insurance(
+        CHAT,
+        USER,
+        amount=120,
+        premium=0,
+        expires_at=bank._now() + bank.DAY,
+    )
+    result = await bank._bail_in(CHAT, bank._now())
+
+    first = await repo.get_deposit(CHAT, USER)
+    second = await repo.get_deposit(CHAT, other)
+    assert (first.principal, first.accrued) == (170, 0)
+    assert (second.principal, second.accrued) == (50, 0)
+    assert result.protected_claims == 220
+    assert result.wiped == 92  # (10 + 5) + (70 + 7)
+
+
+async def test_mature_shortfall_wipes_interest_and_clamps_request_to_surviving_body(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(300)
+    await bank.open_deposit(CHAT, USER, 180)
+    await repo.upsert_deposit(CHAT, USER, accrued=20, matures_at=0)
+    await repo.corp_apply(CHAT, delta=-180)
+
+    result = await bank.withdraw_deposit(CHAT, USER, 100)
+
+    assert result.bail_in is not None
+    assert result.bail_in.wiped == 150  # 20 accrued + 130 risky body
+    assert result.amount == 50
+    assert result.extra == 0
+    assert result.bail_in.payout == 50
+    assert await repo.get_deposit(CHAT, USER) is None
+
+
+async def test_recovery_pays_stored_claim_but_keeps_new_risk_ops_frozen(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(500)
+    await repo.upsert_deposit(CHAT, USER, principal=150, accrued=0, matures_at=0)
+    await repo.corp_apply(CHAT, delta=-10)
+    await repo.set_corp_fields(CHAT, status="recovery")
+
+    for operation in (
+        lambda: bank.open_deposit(CHAT, USER, 1),
+        lambda: bank.buy_sekasko(CHAT, USER, 1),
+        lambda: bank.take_loan(CHAT, USER, 1),
+    ):
+        with pytest.raises(bank.BankError) as error:
+            await operation()
+        assert error.value.code == "corp_frozen"
+
+    result = await bank.withdraw_deposit(CHAT, USER, None)
+
+    assert result.amount == 150
+    assert result.bail_in is None
+    corp = await repo.get_corp(CHAT)
+    assert (corp.balance, corp.status, corp.bankruptcy_count) == (-160, "recovery", 0)
+
+
+async def test_bail_in_failure_rolls_back_claims_ledger_counter_and_event(db, monkeypatch):
+    from sqlalchemy import func, select
+
+    from db.engine import get_session_factory
+    from db.models import CorporationLedger, Event
+    from repositories import bank as repo
+    from repositories import events as events_repo
+    from services import bank
+
+    await _seed_player(0)
+    await repo.upsert_deposit(CHAT, USER, principal=180, accrued=5)
+    corp_before = await repo.get_corp(CHAT)
+    factory = get_session_factory()
+    async with factory() as session:
+        ledger_before = await session.scalar(select(func.count(CorporationLedger.id)))
+        event_before = await session.scalar(select(func.count(Event.id)))
+
+    original = events_repo.add_event
+
+    def explode(session, chat_id, user_id, etype, **kwargs):
+        if etype == events_repo.CORP_BAILIN:
+            raise RuntimeError("injected bail-in event failure")
+        return original(session, chat_id, user_id, etype, **kwargs)
+
+    monkeypatch.setattr(events_repo, "add_event", explode)
+    with pytest.raises(RuntimeError, match="injected bail-in"):
+        await bank._bail_in(CHAT, bank._now())
+
+    dep = await repo.get_deposit(CHAT, USER)
+    corp_after = await repo.get_corp(CHAT)
+    assert (dep.principal, dep.accrued) == (180, 5)
+    assert corp_after.bankruptcy_count == corp_before.bankruptcy_count
+    assert corp_after.total_bailin == corp_before.total_bailin
+    async with factory() as session:
+        assert await session.scalar(select(func.count(CorporationLedger.id))) == ledger_before
+        assert await session.scalar(select(func.count(Event.id))) == event_before
+
+
+async def test_collector_immediately_resolves_legacy_sanation_and_posts_neutral_notice(db):
+    from unittest.mock import AsyncMock
+
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(0)
+    await repo.upsert_deposit(CHAT, USER, principal=120, accrued=7)
+    await repo.set_corp_fields(
+        CHAT,
+        status="sanation",
+        sanation_started_at=1,
+        sanation_deadline=9_999_999,
+    )
+    bot = AsyncMock()
+
+    await bank._run_corporation_crises(bot, bank._now())
+
+    dep = await repo.get_deposit(CHAT, USER)
+    corp = await repo.get_corp(CHAT)
+    assert (dep.principal, dep.accrued) == (50, 0)
+    assert (corp.status, corp.bankruptcy_count, corp.total_bailin) == (
+        "recovery",
+        1,
+        77,
+    )
+    bot.send_message.assert_awaited_once()
+    args, kwargs = bot.send_message.await_args
+    assert args[0] == CHAT
+    assert "Старая санация завершена автоматически" in args[1]
+    assert "инициатор" not in args[1].lower()
+    assert kwargs["parse_mode"] == "HTML"
+
+
+async def test_collector_restores_recovery_only_after_cash_and_claims_are_funded(db):
+    from unittest.mock import AsyncMock
+
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(0)
+    await repo.upsert_deposit(CHAT, USER, principal=50, accrued=0)
+    await repo.corp_apply(CHAT, delta=50)
+    await repo.set_corp_fields(CHAT, status="recovery")
+    bot = AsyncMock()
+
+    await bank._run_corporation_crises(bot, bank._now())
+
+    corp = await repo.get_corp(CHAT)
+    assert corp.status == "healthy"
+    bot.send_message.assert_not_awaited()
 
 
 async def test_positive_dick_uses_emission_then_only_local_cash(db):
@@ -621,16 +940,16 @@ async def test_positive_dick_uses_emission_then_only_local_cash(db):
     await repo.corp_apply(CHAT, delta=10)
     result = await bank.fund_positive_dick(CHAT, USER, 7)
     assert (result.emitted, result.corporation_paid, result.credited, result.clipped) == (
-        3,
-        4,
+        2,
+        5,
         7,
         0,
     )
-    assert (await repo.get_corp(CHAT)).balance == 6
+    assert (await repo.get_corp(CHAT)).balance == 5
 
     other = CHAT - 1
     clipped = await bank.fund_positive_dick(other, USER, 7)
-    assert (clipped.emitted, clipped.corporation_paid, clipped.clipped) == (3, 0, 4)
+    assert (clipped.emitted, clipped.corporation_paid, clipped.clipped) == (2, 0, 5)
     assert (await repo.get_corp(other)).balance == 0
 
 
@@ -768,6 +1087,26 @@ async def test_recover_from_deposit_noop_without_default(db):
     assert dep.principal == 1000  # untouched
 
 
+async def test_overdue_loan_recovery_ignores_base_deposit_protection(db):
+    from repositories import bank as repo
+    from services import bank
+
+    await _seed_player(0)
+    await repo.upsert_deposit(CHAT, USER, principal=50, accrued=0)
+    await repo.upsert_loan(
+        CHAT,
+        USER,
+        principal=20,
+        accrued_interest=0,
+        defaulted=True,
+    )
+
+    recovered = await bank.recover_from_deposit(await repo.get_loan(CHAT, USER))
+
+    assert recovered == 20
+    assert (await repo.get_deposit(CHAT, USER)).principal == 30
+
+
 async def test_confiscation_once_per_day(db):
     from repositories import bank as repo
     from services import bank
@@ -841,3 +1180,85 @@ async def test_roll_confiscation_deterministic(db):
     # The 1000 principal already funded the till on open; confiscation only books
     # the seized slice as earnings without moving cash, so the balance is unchanged.
     assert corp.balance == 1000
+
+
+async def test_confiscation_respects_base_and_sekasko_boundaries(db):
+    from repositories import bank as repo
+    from repositories import players as players_repo
+    from services import bank
+
+    class _Rng:
+        def random(self):
+            return 0.0
+
+        def uniform(self, a, b):
+            return b
+
+    cases = [
+        (USER, 30, 0, 0),
+        (USER + 1, 50, 0, 0),
+        (USER + 2, 120, 0, 7),
+        (USER + 3, 150, 100, 0),
+        (USER + 4, 180, 100, 3),
+    ]
+    for user_id, principal, coverage, expected in cases:
+        await players_repo.set_player_fields(CHAT, user_id, size=0)
+        await repo.upsert_deposit(CHAT, user_id, principal=principal, accrued=0)
+        if coverage:
+            await repo.add_insurance(
+                CHAT,
+                user_id,
+                amount=coverage,
+                premium=0,
+                expires_at=bank._now() + bank.DAY,
+            )
+        dep = await repo.get_deposit(CHAT, user_id)
+
+        seized = await bank.roll_confiscation(dep, cfg(), rng=_Rng())
+
+        assert seized == expected
+        assert (await repo.get_deposit(CHAT, user_id)).principal == principal - expected
+
+
+async def test_confiscation_failure_rolls_back_claim_ledger_counter_and_event(db, monkeypatch):
+    from sqlalchemy import func, select
+
+    from db.engine import get_session_factory
+    from db.models import CorporationLedger, Event
+    from repositories import bank as repo
+    from repositories import events as events_repo
+    from services import bank
+
+    class _Rng:
+        def random(self):
+            return 0.0
+
+        def uniform(self, a, b):
+            return b
+
+    await _seed_player(0)
+    await repo.upsert_deposit(CHAT, USER, principal=120, accrued=0)
+    corp_before = await repo.get_corp(CHAT)
+    factory = get_session_factory()
+    async with factory() as session:
+        ledger_before = await session.scalar(select(func.count(CorporationLedger.id)))
+        event_before = await session.scalar(select(func.count(Event.id)))
+
+    original = events_repo.add_event
+
+    def explode(session, chat_id, user_id, etype, **kwargs):
+        if etype == events_repo.CONFISCATION:
+            raise RuntimeError("injected confiscation event failure")
+        return original(session, chat_id, user_id, etype, **kwargs)
+
+    monkeypatch.setattr(events_repo, "add_event", explode)
+    dep = await repo.get_deposit(CHAT, USER)
+    with pytest.raises(RuntimeError, match="injected confiscation"):
+        await bank.roll_confiscation(dep, cfg(), rng=_Rng())
+
+    assert (await repo.get_deposit(CHAT, USER)).principal == 120
+    corp_after = await repo.get_corp(CHAT)
+    assert corp_after.total_penalties == corp_before.total_penalties
+    async with factory() as session:
+        assert await session.scalar(select(func.count(CorporationLedger.id))) == ledger_before
+        assert await session.scalar(select(func.count(Event.id))) == event_before
