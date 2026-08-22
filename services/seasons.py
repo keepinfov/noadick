@@ -16,14 +16,17 @@ from sqlalchemy import select
 from db.engine import get_session_factory
 from db.models import Event, Player, WeeklySeason
 from repositories import events as E
+from repositories import players as players_repo
 from repositories import seasons as repo
-from services import settings, wealth
+from services import global_settings, settings, wealth
 
 STATUS_LIVE = "live"
 STATUS_FINALIZED = "finalized"
 PUBLICATION_PENDING = "pending"
 PUBLICATION_PUBLISHED = "published"
 PUBLICATION_SKIPPED = "skipped"
+DAY = 86400
+SEASON_SEKASKO_PRIZE_DAYS = 7
 
 _locks: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
 
@@ -50,10 +53,24 @@ class PlayerReport:
     best_dick_delta: int | None
     worst_dick_delta: int | None
     wealth_delta: int
+    sekasko_prize_rank: int = 0
+    sekasko_prize_amount: int = 0
+    sekasko_prize_expires_at: int = 0
 
     @property
     def dick_average(self) -> float:
         return self.dick_total / self.dick_count if self.dick_count else 0.0
+
+
+def _dick_leader_key(
+    player: PlayerReport | repo.PlayerFinal,
+) -> tuple[int, Fraction, int, int]:
+    return (
+        -player.dick_total,
+        -Fraction(player.dick_total, player.dick_count),
+        -player.active_days,
+        player.user_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -102,12 +119,7 @@ class SeasonReport:
         return tuple(
             sorted(
                 (player for player in self.players if player.dick_count),
-                key=lambda player: (
-                    -player.dick_total,
-                    -Fraction(player.dick_total, player.dick_count),
-                    -player.active_days,
-                    player.user_id,
-                ),
+                key=_dick_leader_key,
             )
         )
 
@@ -280,6 +292,9 @@ def _report(season: WeeklySeason) -> SeasonReport:
             best_dick_delta=row.best_dick_delta,
             worst_dick_delta=row.worst_dick_delta,
             wealth_delta=int(row.wealth_delta),
+            sekasko_prize_rank=int(row.sekasko_prize_rank),
+            sekasko_prize_amount=int(row.sekasko_prize_amount),
+            sekasko_prize_expires_at=int(row.sekasko_prize_expires_at),
         )
         for row in season.players
     )
@@ -486,14 +501,31 @@ async def _advance_once(chat_id: int, live: WeeklySeason, *, finalized_at: int) 
             )
 
     result = await _calculate_final(live)
+    cfg = global_settings.get_config_sync()
+    prize_leaders = sorted(
+        (value for value in result.players if value.dick_count > 0),
+        key=_dick_leader_key,
+    )[: max(0, cfg.season_sekasko_prize_places)]
+    prize_ranks = {value.user_id: rank for rank, value in enumerate(prize_leaders, 1)}
     factory = get_session_factory()
-    async with factory() as session, session.begin():
+    # Buying SЕКАСКО uses the same lock. Holding it across the coverage read and
+    # policy insert prevents a concurrent purchase from exceeding the cap.
+    async with players_repo.get_chat_lock(chat_id), factory() as session, session.begin():
         current = await repo.get_live_in(session, chat_id)
         if current is None:
             raise RuntimeError("live season disappeared")
         if current.id != live.id:
             return current
-        await repo.finalize_in(session, current, result, finalized_at=finalized_at)
+        await repo.finalize_in(
+            session,
+            current,
+            result,
+            finalized_at=finalized_at,
+            sekasko_prize_ranks=prize_ranks,
+            sekasko_prize_amount=max(0, cfg.season_sekasko_prize_coverage),
+            sekasko_max_coverage=max(0, cfg.sekasko_max_coverage),
+            sekasko_prize_expires_at=(int(current.ends_at) + SEASON_SEKASKO_PRIZE_DAYS * DAY),
+        )
         starts_at = int(current.ends_at)
         number = await repo.next_number_in(session, chat_id)
         end_states = {

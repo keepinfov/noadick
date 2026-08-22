@@ -59,11 +59,13 @@ EDITABLE_BANK: list[tuple[str, str, int, int, int, int]] = [
 ]
 
 EDITABLE_CORP: list[tuple[str, str, int, int, int, int]] = [
-    ("dick_emission_cap", "/dick: эмиссия плюса (см)", 1, 3, 0, 1000),
+    ("dick_emission_cap", "/dick: эмиссия плюса (см)", 1, 2, 0, 1000),
     ("corp_liquidity_reserve_pct", "Корпорация: резерв вкладов (%)", 5, 25, 0, 100),
-    ("corp_sanation_days", "Корпорация: санация (дней)", 1, 7, 1, 90),
-    ("sekasko_max_coverage", "СЕКАСКО: лимит (см)", 5, 40, 0, 100000),
+    ("sekasko_max_coverage", "СЕКАСКО: лимит (см)", 5, 20, 0, 100),
     ("sekasko_premium_pct", "СЕКАСКО: премия (%)", 1, 5, 0, 100),
+    ("dep_risk_free_principal", "Вклад: несгораемое тело (см)", 5, 50, 0, 100000),
+    ("season_sekasko_prize_places", "Сезон: призовых мест СЕКАСКО", 1, 3, 0, 10),
+    ("season_sekasko_prize_coverage", "Сезон: приз СЕКАСКО (см)", 1, 10, 0, 100000),
     ("credit_reward_min_age_days", "Рейтинг: мин. возраст кредита", 1, 3, 0, 365),
     ("credit_reward_cooldown_days", "Рейтинг: КД зачёта (дней)", 1, 14, 0, 365),
     ("credit_reward_min_limit_pct", "Рейтинг: мин. доля лимита (%)", 5, 25, 0, 100),
@@ -116,11 +118,13 @@ DEFAULTS: dict[str, int] = {
     "loan_duel_garnish_pct": 50,
     "collector_interval_sec": 3600,
     "reminder_cooldown_sec": 21600,
-    "dick_emission_cap": 3,
+    "dick_emission_cap": 2,
     "corp_liquidity_reserve_pct": 25,
-    "corp_sanation_days": 7,
-    "sekasko_max_coverage": 40,
+    "sekasko_max_coverage": 100,
     "sekasko_premium_pct": 5,
+    "dep_risk_free_principal": 50,
+    "season_sekasko_prize_places": 3,
+    "season_sekasko_prize_coverage": 10,
     "credit_reward_min_age_days": 3,
     "credit_reward_cooldown_days": 14,
     "credit_reward_min_limit_pct": 25,
@@ -165,9 +169,11 @@ class GlobalConfig:
     reminder_cooldown_sec: int
     dick_emission_cap: int
     corp_liquidity_reserve_pct: int
-    corp_sanation_days: int
     sekasko_max_coverage: int
     sekasko_premium_pct: int
+    dep_risk_free_principal: int
+    season_sekasko_prize_places: int
+    season_sekasko_prize_coverage: int
     credit_reward_min_age_days: int
     credit_reward_cooldown_days: int
     credit_reward_min_limit_pct: int

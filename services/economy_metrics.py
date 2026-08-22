@@ -9,7 +9,7 @@ from sqlalchemy import Integer, case, cast, distinct, func, select
 from db.engine import get_session_factory
 from db.models import ChatCorporation, Deposit, Event, Loan, Player, PokerSeat, PokerTable
 from models.disease import DISEASE_CHANCE, DISEASES
-from repositories.events import PISYAGO
+from repositories.events import PISYAGO, SEASON_SEKASKO_PRIZE
 from services.bank import pisyago_coverage_pct
 from services.game import WEIGHTED_RANGES
 
@@ -210,7 +210,10 @@ async def snapshot(now: int | None = None) -> EconomySnapshot:
                     select(
                         func.coalesce(func.sum(Event.delta), 0),
                         func.count(distinct(Event.user_id)),
-                    ).where(Event.created_at >= now - days * 86400)
+                    ).where(
+                        Event.created_at >= now - days * 86400,
+                        Event.type != SEASON_SEKASKO_PRIZE,
+                    )
                 )
             ).one()
             return int(net), int(active)

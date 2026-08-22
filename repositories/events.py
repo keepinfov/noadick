@@ -40,6 +40,7 @@ CORP_EMISSION = "corp_emission"
 CORP_SANATION = "corp_sanation"
 CORP_BAILIN = "corp_bailin"
 PISYAGO = "pisyago"
+SEASON_SEKASKO_PRIZE = "season_sekasko_prize"
 
 
 def dick_game_delta(event: Event) -> int:

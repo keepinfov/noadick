@@ -94,6 +94,37 @@ def test_season_caption_is_safe_bounded_and_handles_empty() -> None:
     assert "Пустая неделя" in empty
 
 
+def test_archived_season_shows_actual_sekasko_prize_and_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from presentation import seasons as view
+
+    now = int(datetime(2026, 8, 30, 12, tzinfo=ZoneInfo("UTC")).timestamp())
+    monkeypatch.setattr(view.time, "time", lambda: now)
+    expires_at = int(datetime(2026, 8, 31, 12, tzinfo=ZoneInfo("UTC")).timestamp())
+    base = report()
+    winner = replace(
+        base.players[0],
+        sekasko_prize_rank=1,
+        sekasko_prize_amount=7,
+        sekasko_prize_expires_at=expires_at,
+    )
+    value = replace(base, players=(winner, base.players[1]))
+
+    summary = view.caption(value)
+    table = view.caption(value, full=True)
+
+    assert "Призы СЕКАСКО" in summary
+    assert "<b>7 см</b> до 31 августа, 12:00" in summary
+    assert "защита тела вклада уже действует" in summary
+    assert "🛡 7 см" in table
+
+    expired = view.caption(
+        replace(value, players=(replace(winner, sekasko_prize_expires_at=1), base.players[1]))
+    )
+    assert "Срок этих наград уже истёк" in expired
+
+
 def test_full_season_table_pages_combined_metrics() -> None:
     from presentation import seasons as view
 

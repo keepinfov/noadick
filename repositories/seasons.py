@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.engine import get_session_factory
-from db.models import Chat, WeeklySeason, WeeklySeasonPlayer
+from db.models import Chat, DepositInsurance, Event, WeeklySeason, WeeklySeasonPlayer
+from repositories import events as E
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,10 @@ async def finalize_in(
     result: SeasonFinal,
     *,
     finalized_at: int,
+    sekasko_prize_ranks: Mapping[int, int] | None = None,
+    sekasko_prize_amount: int = 0,
+    sekasko_max_coverage: int = 0,
+    sekasko_prize_expires_at: int = 0,
 ) -> WeeklySeason:
     if season.status != "live" or season.is_partial:
         raise ValueError("only a live official season can be finalized")
@@ -243,6 +248,13 @@ async def finalize_in(
     season.worst_dick_user_id = result.worst_dick_user_id
     season.finalized_at = finalized_at
 
+    prize_ranks = sekasko_prize_ranks or {}
+    prizes_enabled = (
+        not result.is_empty
+        and sekasko_prize_amount > 0
+        and sekasko_max_coverage > 0
+        and sekasko_prize_expires_at > finalized_at
+    )
     existing = {row.user_id: row for row in season.players}
     final_ids: set[int] = set()
     for value in result.players:
@@ -262,6 +274,64 @@ async def finalize_in(
         row.best_dick_delta = value.best_dick_delta
         row.worst_dick_delta = value.worst_dick_delta
         row.wealth_delta = value.wealth_delta
+        prize_rank = int(prize_ranks.get(value.user_id, 0))
+        eligible = prizes_enabled and prize_rank > 0 and value.dick_count > 0
+        active_coverage = 0
+        if eligible:
+            active_coverage = int(
+                await session.scalar(
+                    select(func.coalesce(func.sum(DepositInsurance.amount), 0)).where(
+                        DepositInsurance.chat_id == season.chat_id,
+                        DepositInsurance.user_id == value.user_id,
+                        DepositInsurance.expires_at > finalized_at,
+                    )
+                )
+                or 0
+            )
+        awarded = (
+            min(
+                sekasko_prize_amount,
+                max(0, sekasko_max_coverage - max(0, active_coverage)),
+            )
+            if eligible
+            else 0
+        )
+        if awarded > 0:
+            row.sekasko_prize_rank = prize_rank
+            row.sekasko_prize_amount = awarded
+            row.sekasko_prize_expires_at = sekasko_prize_expires_at
+            session.add(
+                DepositInsurance(
+                    chat_id=season.chat_id,
+                    user_id=value.user_id,
+                    amount=awarded,
+                    premium=0,
+                    expires_at=sekasko_prize_expires_at,
+                    source="season_prize",
+                    source_season_id=season.id,
+                    created_at=finalized_at,
+                )
+            )
+            session.add(
+                Event(
+                    chat_id=season.chat_id,
+                    user_id=value.user_id,
+                    type=E.SEASON_SEKASKO_PRIZE,
+                    delta=0,
+                    size_after=value.end_length,
+                    meta={
+                        "season_number": season.season_number,
+                        "rank": prize_rank,
+                        "coverage": awarded,
+                        "expires_at": sekasko_prize_expires_at,
+                    },
+                    created_at=finalized_at,
+                )
+            )
+        else:
+            row.sekasko_prize_rank = 0
+            row.sekasko_prize_amount = 0
+            row.sekasko_prize_expires_at = 0
     for user_id, row in existing.items():
         if user_id not in final_ids:
             await session.delete(row)

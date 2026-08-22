@@ -202,6 +202,12 @@ class DepositInsurance(Base):
     __tablename__ = "deposit_insurance"
     __table_args__ = (
         Index("ix_deposit_insurance_owner_expiry", "chat_id", "user_id", "expires_at"),
+        Index(
+            "uq_deposit_insurance_season_user",
+            "source_season_id",
+            "user_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -210,6 +216,11 @@ class DepositInsurance(Base):
     amount: Mapped[int] = mapped_column(Integer)
     premium: Mapped[int] = mapped_column(Integer)
     expires_at: Mapped[int] = mapped_column(Integer)
+    # Purchased coverage and free seasonal prizes share the same consumption
+    # path. Prize policies remain useful before a deposit exists, while the
+    # source season makes their issuance idempotent and auditable.
+    source: Mapped[str] = mapped_column(String(32), default="purchase", server_default="purchase")
+    source_season_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
 
 
@@ -381,6 +392,9 @@ class WeeklySeasonPlayer(Base):
     best_dick_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
     worst_dick_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
     wealth_delta: Mapped[int] = mapped_column(Integer, default=0)
+    sekasko_prize_rank: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sekasko_prize_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sekasko_prize_expires_at: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     season: Mapped[WeeklySeason] = relationship(back_populates="players")
 
@@ -458,11 +472,16 @@ class GlobalSettings(Base):
     loan_duel_garnish_pct: Mapped[int] = mapped_column(Integer, default=50)
     collector_interval_sec: Mapped[int] = mapped_column(Integer, default=3600)
     reminder_cooldown_sec: Mapped[int] = mapped_column(Integer, default=21600)
-    dick_emission_cap: Mapped[int] = mapped_column(Integer, default=3)
+    dick_emission_cap: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
     corp_liquidity_reserve_pct: Mapped[int] = mapped_column(Integer, default=25)
     corp_sanation_days: Mapped[int] = mapped_column(Integer, default=7)
-    sekasko_max_coverage: Mapped[int] = mapped_column(Integer, default=40)
+    sekasko_max_coverage: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
     sekasko_premium_pct: Mapped[int] = mapped_column(Integer, default=5)
+    dep_risk_free_principal: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
+    season_sekasko_prize_places: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
+    season_sekasko_prize_coverage: Mapped[int] = mapped_column(
+        Integer, default=10, server_default="10"
+    )
     credit_reward_min_age_days: Mapped[int] = mapped_column(Integer, default=3)
     credit_reward_cooldown_days: Mapped[int] = mapped_column(Integer, default=14)
     credit_reward_min_limit_pct: Mapped[int] = mapped_column(Integer, default=25)

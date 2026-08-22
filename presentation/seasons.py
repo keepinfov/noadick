@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -66,6 +67,11 @@ def _player_name(report: seasons.SeasonReport, user_id: int | None) -> str:
     return _name(player.name) if player else html.escape(str(user_id))
 
 
+def _prize_expiry(timestamp: int, timezone: str) -> str:
+    value = datetime.fromtimestamp(timestamp, ZoneInfo(timezone))
+    return f"{value.day} {_MONTHS[value.month - 1]}, {value:%H:%M}"
+
+
 def _heading(report: seasons.SeasonReport) -> list[str]:
     if report.is_partial:
         title = "🔥 <b>Разминка сезона · неполная неделя</b>"
@@ -109,6 +115,12 @@ def _combined_players(report: seasons.SeasonReport) -> tuple[seasons.PlayerRepor
 
 def caption(report: seasons.SeasonReport, *, full: bool = False, page: int = 0) -> str:
     lines = _heading(report)
+    prizes = tuple(
+        sorted(
+            (value for value in report.players if value.sekasko_prize_rank > 0),
+            key=lambda value: (value.sekasko_prize_rank, value.user_id),
+        )
+    )
     if report.is_empty:
         lines.extend(
             [
@@ -135,6 +147,7 @@ def caption(report: seasons.SeasonReport, *, full: bool = False, page: int = 0) 
             f"{safe_page * 10 + index}. {_name(row.name, 14)} — "
             f"<b>{_signed(row.dick_total)}</b> · {row.dick_average:+.1f} · "
             f"{row.active_days} | <b>{_signed(row.wealth_delta)}</b>"
+            + (f" | 🛡 {row.sekasko_prize_amount} см" if row.sekasko_prize_amount > 0 else "")
             for index, row in enumerate(chunk, 1)
         )
         if not chunk:
@@ -164,6 +177,22 @@ def caption(report: seasons.SeasonReport, *, full: bool = False, page: int = 0) 
                 ),
             ]
         )
+        if prizes:
+            lines.extend(["", "🛡 <b>Призы СЕКАСКО</b>"])
+            lines.extend(
+                f"{row.sekasko_prize_rank}. {_name(row.name)} — "
+                f"<b>{row.sekasko_prize_amount} см</b> до "
+                f"{_prize_expiry(row.sekasko_prize_expires_at, report.timezone)}"
+                for row in prizes[:5]
+            )
+            if len(prizes) > 5:
+                lines.append(f"…и ещё {len(prizes) - 5}")
+            if any(row.sekasko_prize_expires_at > int(time.time()) for row in prizes):
+                lines.append(
+                    "<i>Бесплатная защита тела вклада уже действует, даже если вклада пока нет.</i>"
+                )
+            else:
+                lines.append("<i>Срок этих наград уже истёк; в архиве показаны выданные призы.</i>")
 
     active = max(
         report.players, key=lambda value: (value.active_days, -value.user_id), default=None
