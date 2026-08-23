@@ -96,6 +96,7 @@ async def cmd_gameconfig(message: Message, command: CommandObject) -> None:
                 eff.duel_stake_default,
                 eff.duel_timeout,
                 eff.poker_enabled,
+                eff.casino_enabled,
             ),
             parse_mode="HTML",
         )

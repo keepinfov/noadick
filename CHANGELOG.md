@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Group chats now have a Telegram `🎰` casino with saved 1–50 centimetre stakes,
+  public one-off/default-spin buttons, Corporation-funded payouts, and an
+  administrator switch.
 - The top three players of each completed chat season receive 10 centimetres of
   SЕКАСКО coverage for a fixed seven days measured from the season end, not a
   later finalization. Prize coverage can wait for a future deposit and never
@@ -15,6 +18,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Casino wins and losses participate in the chat-local economy and seasonal
+  wealth timeline; an unfundable win triggers the same immediate deposit
+  bail-in and recovery mode as an unfundable withdrawal.
 - Controlled positive `/dick` emission is reduced from 3 to 2 centimetres.
 - The first 50 centimetres of deposit principal are protected without a policy;
   active SЕКАСКО protects up to 100 additional centimetres on top. Accrued

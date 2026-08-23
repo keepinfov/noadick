@@ -171,6 +171,18 @@ async def cb_st_toggle_poker(
     await _rerender(callback, chat_id)
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "casino"))
+async def cb_st_toggle_casino(
+    callback: CallbackQuery, bot: Bot, callback_data: SettingsCallback
+) -> None:
+    chat_id = callback_data.chat_id
+    if not await _may_edit_settings(callback, bot, chat_id):
+        await callback.answer(texts.SETTINGS_NOT_ALLOWED, show_alert=True)
+        return
+    await settings.toggle_casino(chat_id)
+    await _rerender(callback, chat_id)
+
+
 @router.callback_query(SettingsCallback.filter(F.action == "digest"))
 async def cb_st_toggle_digest(
     callback: CallbackQuery, bot: Bot, callback_data: SettingsCallback

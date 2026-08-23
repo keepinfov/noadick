@@ -254,6 +254,7 @@ HELP = (
     "Команды:\n"
     "/help — вывести этот текст\n"
     "/dick — испытать удачу\n"
+    "/casino [ставка] — крутить слот или сохранить ставку\n"
     "/duel [ставка] — вызвать на дуэль (ответом на сообщение)\n"
     "/poker — ПИСЮН-HOLDEM на сантиметры\n"
     "/me — твой профиль и статистика\n"
@@ -338,21 +339,29 @@ GAMECONFIG_USAGE = (
     "• <code>tz</code> — часовой пояс (например <code>Europe/Moscow</code>)\n"
     "• <code>diseases</code> — болезни <code>on</code>/<code>off</code>\n"
     "• <code>poker</code> — покер <code>on</code>/<code>off</code>\n"
+    "• <code>casino</code> — казино <code>on</code>/<code>off</code>\n"
     "• <code>duel_stake</code> — ставка дуэли по умолчанию (1–1000)\n"
     "• <code>duel_timeout</code> — таймаут дуэли в секундах (10–600)"
 )
 
 
 def gameconfig_current(
-    tz: str, diseases: bool, stake: int, timeout: int, poker: bool = True
+    tz: str,
+    diseases: bool,
+    stake: int,
+    timeout: int,
+    poker: bool = True,
+    casino: bool = True,
 ) -> str:
     on_off = "on" if diseases else "off"
     poker_on_off = "on" if poker else "off"
+    casino_on_off = "on" if casino else "off"
     return (
         "⚙️ Текущие настройки чата:\n"
         f"• tz: <code>{html.escape(tz)}</code>\n"
         f"• diseases: <code>{on_off}</code>\n"
         f"• poker: <code>{poker_on_off}</code>\n"
+        f"• casino: <code>{casino_on_off}</code>\n"
         f"• duel_stake: <code>{stake}</code>\n"
         f"• duel_timeout: <code>{timeout}</code>"
     )
@@ -363,12 +372,82 @@ def gameconfig_set_ok(key: str, value: str) -> str:
 
 
 GAMECONFIG_ERRORS = {
-    "unknown_key": "Неизвестный ключ. Доступны: tz, diseases, poker, duel_stake, duel_timeout.",
+    "unknown_key": "Неизвестный ключ. Доступны: tz, diseases, poker, casino, duel_stake, duel_timeout.",
     "bad_tz": "Неизвестный часовой пояс. Пример: Europe/Moscow.",
     "bad_bool": "Ожидается on или off.",
     "bad_int": "Ожидается целое число.",
     "out_of_range": "Значение вне допустимого диапазона.",
 }
+
+
+# ------------------------------------------------------------------- /casino ---
+
+CASINO_GROUP_ONLY = "🎰 Казино работает только в группах — в одиночку кассу не раскачаешь."
+CASINO_BAD_STAKE = "🎰 Ставка должна быть целым числом от 1 до 50 см."
+CASINO_DISABLED = "🎰 Казино отключено администраторами этого чата."
+CASINO_NO_PLAYER = "🎰 Сначала сыграй в /dick — без размера к автомату не подпускают."
+CASINO_NO_SIZE = "🎰 На руках пусто. Сначала отрасти хоть что-нибудь через /dick."
+CASINO_INSUFFICIENT = "🎰 На руках меньше выбранной ставки. Уменьши её через /casino 5."
+CASINO_RECOVERY = "🎰 Корпорация восстанавливает кассу после распила. Крутки пока закрыты."
+CASINO_SEND_FAILED = "🎰 Telegram не запустил слот. Деньги не списаны."
+CASINO_SPIN_CANCELED = "⚠️ Крутка отменена: результат не рассчитан, деньги не изменились."
+CASINO_BUTTON_INVALID = "Эта кнопка казино устарела или повреждена. Вызови /casino заново."
+
+BTN_CASINO_OWN = "🎯 Крутить свою"
+
+
+def casino_stake_saved(stake: int) -> str:
+    return (
+        f"✅ Ставка казино сохранена: <b>{stake} см</b>.\n"
+        "Теперь <code>/casino</code> крутит слот с этой ставкой."
+    )
+
+
+def casino_repeat_button(stake: int) -> str:
+    return f"🎰 Крутить {stake}"
+
+
+def casino_cooldown(retry_after: int) -> str:
+    return f"⏳ Автомат ещё крутится. Подожди {max(1, retry_after)} сек."
+
+
+_CASINO_SYMBOLS = {
+    "bar": "BAR",
+    "grapes": "🍇",
+    "lemon": "🍋",
+    "seven": "7️⃣",
+}
+
+
+def casino_result(user_id: int, name: str, result) -> str:
+    mention = f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
+    symbols = " · ".join(_CASINO_SYMBOLS.get(value, "?") for value in result.symbols)
+    if result.multiplier == 18:
+        title = "💥 <b>ДЖЕКПОТ ×18</b>"
+    elif result.multiplier == 5:
+        title = "✨ <b>Три одинаковых ×5</b>"
+    elif result.multiplier == 3:
+        title = "🔥 <b>Две семёрки ×3</b>"
+    else:
+        title = "💸 <b>Мимо</b>"
+    net = f"+{result.net}" if result.net > 0 else str(result.net).replace("-", "−")
+    return (
+        f"{title}\n{mention}: {symbols}\n\n"
+        f"Ставка: <b>{result.stake} см</b> · выплата: <b>{result.gross_payout} см</b>\n"
+        f"Чистый итог: <b>{net} см</b> · размер: <b>{result.size_after} см</b>"
+    )
+
+
+def casino_bail_in_notice(name: str, payout: int, status: str) -> str:
+    status_label = {
+        "healthy": "нормальный",
+        "recovery": "восстановление",
+    }.get(status, "неизвестный")
+    return (
+        f"🚨 Выигрыш <b>{html.escape(name)}</b> на <b>{payout} см</b> вызвал распил "
+        f"Корпорации. Статус кассы: <b>{status_label}</b>.\n"
+        "Персональные остатки вкладчиков не публикуются."
+    )
 
 
 # ---------------------------------------------------------------------- /duel ---
@@ -687,6 +766,7 @@ def settings_screen(
     timeout: int,
     banking: bool = True,
     poker: bool = True,
+    casino: bool = True,
     digest: bool = False,
     digest_weekday: int = 0,
     digest_hour: int = 10,
@@ -694,6 +774,7 @@ def settings_screen(
     on_off = "вкл" if diseases else "выкл"
     bank_off = "вкл" if banking else "выкл"
     poker_off = "вкл" if poker else "выкл"
+    casino_off = "вкл" if casino else "выкл"
     digest_off = "вкл" if digest else "выкл"
     weekdays = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
     return (
@@ -702,6 +783,7 @@ def settings_screen(
         f"• Болезни: {on_off}\n"
         f"• Банк: {bank_off}\n"
         f"• Покер: {poker_off}\n"
+        f"• Казино: {casino_off}\n"
         f"• Ставка дуэли: {stake}\n"
         f"• Таймаут дуэли: {timeout} сек\n"
         f"• Недельные сезоны: {digest_off}, {weekdays[digest_weekday]} {digest_hour:02d}:00"
@@ -718,6 +800,10 @@ def settings_btn_banking(enabled: bool) -> str:
 
 def settings_btn_poker(enabled: bool) -> str:
     return f"🃏 Покер: {'✅' if enabled else '❌'}"
+
+
+def settings_btn_casino(enabled: bool) -> str:
+    return f"🎰 Казино: {'✅' if enabled else '❌'}"
 
 
 def settings_label_stake(value: int) -> str:

@@ -48,6 +48,12 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                text=texts.settings_btn_casino(eff.casino_enabled),
+                callback_data=SettingsCallback(action="casino", chat_id=chat_id).pack(),
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text=texts.settings_label_stake(eff.duel_stake_default),
                 callback_data="st:noop",
             )
@@ -144,14 +150,15 @@ def settings_kb(chat_id: int, eff, *, scope: str) -> InlineKeyboardMarkup:
 async def render_settings(chat_id: int, *, scope: str) -> tuple[str, InlineKeyboardMarkup]:
     eff = await settings.get_effective(chat_id)
     text = texts.settings_screen(
-        eff.tz,
-        eff.diseases_enabled,
-        eff.duel_stake_default,
-        eff.duel_timeout,
-        eff.banking_enabled,
-        eff.poker_enabled,
-        eff.stats_digest_enabled,
-        eff.stats_digest_weekday,
-        eff.stats_digest_hour,
+        tz=eff.tz,
+        diseases=eff.diseases_enabled,
+        stake=eff.duel_stake_default,
+        timeout=eff.duel_timeout,
+        banking=eff.banking_enabled,
+        poker=eff.poker_enabled,
+        casino=eff.casino_enabled,
+        digest=eff.stats_digest_enabled,
+        digest_weekday=eff.stats_digest_weekday,
+        digest_hour=eff.stats_digest_hour,
     )
     return text, settings_kb(chat_id, eff, scope=scope)

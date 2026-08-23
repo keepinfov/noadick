@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from callbacks import BankCallback, DuelCallback, SettingsCallback, StatsCallback
+from callbacks import BankCallback, CasinoCallback, DuelCallback, SettingsCallback, StatsCallback
 from config import AppSettings
 from scripts.healthcheck import main as healthcheck
 from services.backups import create_backup
@@ -85,6 +85,7 @@ def test_callback_payloads_are_typed_and_fit_telegram_limit() -> None:
         BankCallback(action="lrepayc", user_id=9_223_372_036_854_775_807).pack(),
         SettingsCallback(action="timezone", chat_id=-9_223_372_036_854_775_807).pack(),
         DuelCallback(token="a" * 32).pack(),
+        CasinoCallback(action="r", stake=50).pack(),
         StatsCallback(
             action="show",
             scope="u",
@@ -99,6 +100,7 @@ def test_callback_payloads_are_typed_and_fit_telegram_limit() -> None:
     assert BankCallback.unpack(payloads[0]).action == "lrepayc"
     assert SettingsCallback.unpack(payloads[1]).chat_id == -9_223_372_036_854_775_807
     assert DuelCallback.unpack(payloads[2]).token == "a" * 32
+    assert CasinoCallback.unpack(payloads[3]).stake == 50
 
 
 def test_economy_simulation_is_deterministic_and_validates_inputs() -> None:

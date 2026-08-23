@@ -19,6 +19,13 @@ class DuelCallback(CallbackData, prefix="duel"):
     token: str
 
 
+class CasinoCallback(CallbackData, prefix="cas"):
+    """Public casino spin: repeat a fixed stake or use the clicker's default."""
+
+    action: str
+    stake: int = 0
+
+
 class StatsCallback(CallbackData, prefix="stx"):
     action: str
     scope: str

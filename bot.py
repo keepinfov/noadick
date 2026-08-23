@@ -12,6 +12,7 @@ from db.engine import dispose_engine, init_db
 from handlers import (
     admin,
     bank,
+    casino,
     dick,
     duel,
     help,
@@ -81,6 +82,7 @@ async def main() -> None:
         settings.router,
         modtools.router,
         dick.router,
+        casino.router,
         duel.router,
         poker.router,
         bank.router,
@@ -95,6 +97,7 @@ async def main() -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="dick", description="Испытать удачу"),
+            BotCommand(command="casino", description="Крутить Telegram-слот"),
             BotCommand(command="duel", description="Вызвать на дуэль (ответом)"),
             BotCommand(command="poker", description="Создать или открыть покерный стол"),
             BotCommand(command="me", description="Твой профиль и статистика"),
