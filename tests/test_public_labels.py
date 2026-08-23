@@ -74,20 +74,24 @@ def test_0010_migration_roundtrip_from_0009(tmp_path: Path) -> None:
     assert "public_label" in _user_columns(path)
 
 
-async def test_public_label_repository_is_global_and_upsert_safe(db) -> None:
+async def test_public_label_is_global_and_user_upsert_safe(db) -> None:
+    from db.engine import get_session_factory
+    from db.models import User
     from repositories import chats
 
-    await chats.set_user_public_label(42, "  Первый игрок  ")
-    user = await chats.get_user(42)
-    assert user is not None
-    assert user.first_name == "42"
-    assert await chats.get_user_public_label(42) == "Первый игрок"
+    await chats.upsert_user(42, "Игрок", None)
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await session.get(User, 42)
+        assert user is not None
+        user.public_label = "Первый игрок"
+        await session.commit()
 
     await chats.upsert_user(42, "Новое имя", "player")
-    assert await chats.get_user_public_label(42) == "Первый игрок"
-
-    await chats.set_user_public_label(42, "   ")
-    assert await chats.get_user_public_label(42) is None
+    user = await chats.get_user(42)
+    assert user is not None
+    assert user.first_name == "Новое имя"
+    assert user.public_label == "Первый игрок"
 
 
 async def test_stats_and_profiles_show_escaped_public_label_only(db) -> None:
@@ -101,13 +105,12 @@ async def test_stats_and_profiles_show_escaped_public_label_only(db) -> None:
     user_id = 42
     await chats.upsert_user(user_id, "Игрок <&>", "player")
     await players.set_player_fields(chat_id, user_id, name="Игрок <&>", size=12)
-    await chats.set_user_public_label(user_id, "  <легенда> & тест  ")
-
     factory = get_session_factory()
     async with factory() as session:
         user = await session.get(User, user_id)
         assert user is not None
         user.notes = "ПРИВАТНАЯ ЗАМЕТКА"
+        user.public_label = "<легенда> & тест"
         await session.commit()
 
     local_stats = await stats.compute_profile(chat_id, user_id)
@@ -124,7 +127,11 @@ async def test_stats_and_profiles_show_escaped_public_label_only(db) -> None:
     assert "ПРИВАТНАЯ ЗАМЕТКА" not in local_text
     assert "ПРИВАТНАЯ ЗАМЕТКА" not in global_text
 
-    await chats.set_user_public_label(user_id, None)
+    async with factory() as session:
+        user = await session.get(User, user_id)
+        assert user is not None
+        user.public_label = None
+        await session.commit()
     local_without = public.profile(await stats.compute_profile(chat_id, user_id), user_id=user_id)
     global_without = public.global_profile(await stats.compute_global_profile(user_id))
     assert "От разработчиков" not in local_without

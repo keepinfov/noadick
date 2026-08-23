@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Global administrators can assign or clear an HTML-safe public developer label
+  shown in a player's profile across every chat; each change is audited atomically.
 - Group chats now have a Telegram `🎰` casino with saved 1–50 centimetre stakes,
   compact loss messages, Corporation-funded payouts, and an administrator
   switch.

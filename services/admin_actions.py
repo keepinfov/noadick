@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import texts
 from db.engine import get_session_factory
-from db.models import AuditLog
+from db.models import AuditLog, User
 from models.disease import DISEASE_BY_ID
 from repositories import broadcasts as broadcasts_repo
 from repositories import chats as chats_repo
@@ -103,6 +103,44 @@ async def set_name(actor_id: int, chat_id: int, user_id: int, name: str) -> Acti
         payload={"name": name},
     )
     return ActionResult(True, texts.res_name_set(name))
+
+
+def _normalize_public_label(label: str | None) -> tuple[bool, str | None]:
+    if label is None:
+        return True, None
+    if not isinstance(label, str) or "\r" in label or "\n" in label:
+        return False, None
+    normalized = label.strip()
+    if normalized == "-":
+        return True, None
+    if not normalized or len(normalized) > texts.MAX_PUBLIC_LABEL_LEN:
+        return False, None
+    return True, normalized
+
+
+async def set_public_label(actor_id: int, user_id: int, label: str | None) -> ActionResult:
+    """Set a global public profile label and its audit row atomically."""
+    valid, normalized = _normalize_public_label(label)
+    if not valid:
+        return ActionResult(False, texts.RES_PUBLIC_LABEL_INVALID)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return ActionResult(False, texts.RES_USER_NOT_FOUND)
+        before = user.public_label
+        user.public_label = normalized
+        session.add(
+            AuditLog(
+                actor_id=actor_id,
+                action="set_public_label",
+                target_user=user_id,
+                payload={"before": before, "after": normalized},
+            )
+        )
+        await session.commit()
+    return ActionResult(True, texts.res_public_label_set(normalized))
 
 
 async def give_disease(actor_id: int, chat_id: int, user_id: int, disease_id: str) -> ActionResult:

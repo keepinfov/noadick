@@ -54,6 +54,7 @@ router.callback_query.filter(IsGlobalAdmin())
 class AdminStates(StatesGroup):
     set_size = State()
     set_name = State()
+    set_public_label = State()
     find_query = State()
     broadcast_text = State()
     broadcast_confirm = State()
@@ -312,7 +313,15 @@ async def render_player(
     user = await chats_repo.get_user(user_id)
     username = f"@{user.username}" if user and user.username else "—"
     tag = disease_tag(_player_dict(p))
-    text = texts.admin_player_header(p.name, tag, user_id, username, p.size, chat_id)
+    text = texts.admin_player_header(
+        p.name,
+        tag,
+        user_id,
+        username,
+        p.size,
+        chat_id,
+        user.public_label if user else None,
+    )
     base = f"{chat_id}:{user_id}"
     if user and user.is_banned:
         ban_btn = InlineKeyboardButton(
@@ -336,6 +345,12 @@ async def render_player(
         [
             InlineKeyboardButton(text=texts.BTN_GIVE_DISEASE, callback_data=f"adm:disl:{base}"),
             InlineKeyboardButton(text=texts.BTN_CURE, callback_data=f"adm:cure:{base}"),
+        ],
+        [
+            InlineKeyboardButton(
+                text=texts.BTN_SET_PUBLIC_LABEL,
+                callback_data=f"adm:setlabel:{base}",
+            )
         ],
         [
             InlineKeyboardButton(text=texts.BTN_RESET_PLAYER, callback_data=f"adm:rp:{base}"),
@@ -405,6 +420,19 @@ async def cb_detailed_stats(callback: CallbackQuery) -> None:
 _CANCEL_KB = InlineKeyboardMarkup(
     inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="adm:home")]]
 )
+
+
+def _public_label_cancel_kb(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_CANCEL,
+                    callback_data=f"adm:p:{chat_id}:{user_id}",
+                )
+            ]
+        ]
+    )
 
 
 def _confirm_kb(yes_data: str, back_data: str) -> InlineKeyboardMarkup:
@@ -1208,6 +1236,58 @@ async def msg_set_name(message: Message, state: FSMContext) -> None:
         await message.answer(texts.ADMIN_NAME_EMPTY, reply_markup=main_menu_kb())
         return
     await admin_actions.set_name(message.from_user.id, data["chat_id"], data["user_id"], name)
+    text, kb = await render_player(data["chat_id"], data["user_id"])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("adm:setlabel:"))
+async def cb_set_public_label(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, chat_id, user_id = callback.data.split(":")
+    parsed_chat_id, parsed_user_id = int(chat_id), int(user_id)
+    await state.set_state(AdminStates.set_public_label)
+    await state.update_data(chat_id=parsed_chat_id, user_id=parsed_user_id)
+    await _edit(
+        callback,
+        texts.ADMIN_ENTER_PUBLIC_LABEL,
+        _public_label_cancel_kb(parsed_chat_id, parsed_user_id),
+    )
+
+
+@router.message(AdminStates.set_public_label)
+async def msg_set_public_label(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    raw = message.text
+    normalized = raw.strip() if raw is not None else ""
+    invalid = (
+        raw is None
+        or "\r" in raw
+        or "\n" in raw
+        or not normalized
+        or len(normalized) > texts.MAX_PUBLIC_LABEL_LEN
+    )
+    cancel_kb = _public_label_cancel_kb(data["chat_id"], data["user_id"])
+    if invalid:
+        await message.answer(
+            f"{texts.ADMIN_PUBLIC_LABEL_INVALID}\n\n{texts.ADMIN_ENTER_PUBLIC_LABEL}",
+            reply_markup=cancel_kb,
+            parse_mode="HTML",
+        )
+        return
+
+    result = await admin_actions.set_public_label(
+        message.from_user.id,
+        data["user_id"],
+        None if normalized == "-" else normalized,
+    )
+    if not result.ok:
+        await message.answer(
+            f"{result.message}\n\n{texts.ADMIN_ENTER_PUBLIC_LABEL}",
+            reply_markup=cancel_kb,
+            parse_mode="HTML",
+        )
+        return
+
+    await state.clear()
     text, kb = await render_player(data["chat_id"], data["user_id"])
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 

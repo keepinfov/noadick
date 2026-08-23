@@ -19,10 +19,11 @@ from zoneinfo import ZoneInfo
 # keep their own varied wording on purpose.
 DICK = "писюн"
 
-# Max lengths for free-text admin input (truncated before storing/displaying).
+# Max lengths for free-text admin input.
 MAX_NAME_LEN = 64
 MAX_QUERY_LEN = 64
 MAX_BAN_REASON_LEN = 200
+MAX_PUBLIC_LABEL_LEN = 80
 
 
 def _zone(tz: str | None) -> ZoneInfo:
@@ -897,6 +898,7 @@ BTN_UNBAN = "✅ Разбан"
 BTN_BAN_CHAT = "🚫 Бан чата"
 BTN_SET_SIZE = "🔢 Задать размер"
 BTN_SET_NAME = "✏️ Имя"
+BTN_SET_PUBLIC_LABEL = "🏷 Публичный лейбл"
 BTN_GIVE_DISEASE = "🦠 Выдать болезнь"
 BTN_CURE = "💊 Вылечить"
 BTN_RESET_PLAYER = "♻️ Сброс игрока"
@@ -932,6 +934,11 @@ ADMIN_ENTER_SIZE = "Введи новый размер (целое число):"
 ADMIN_SIZE_NOT_INT = "Нужно целое число. Отменено."
 ADMIN_ENTER_NAME = "Введи новое имя:"
 ADMIN_NAME_EMPTY = "Пустое имя. Отменено."
+ADMIN_ENTER_PUBLIC_LABEL = (
+    "Введи публичный лейбл одной строкой (до 80 символов).\n"
+    "Отправь <code>-</code>, чтобы убрать его."
+)
+ADMIN_PUBLIC_LABEL_INVALID = "Нужна непустая строка без переносов, не длиннее 80 символов."
 ADMIN_ENTER_BAN_REASON = "Введи причину бана:"
 ADMIN_ENTER_BAN_CHAT_REASON = "Введи причину бана чата:"
 ADMIN_REASON_EMPTY = "Пустая причина. Отменено."
@@ -979,14 +986,23 @@ def admin_player_line(name: str, tag: str, size: int, user_id: int) -> str:
 
 
 def admin_player_header(
-    name: str, tag: str, user_id: int, username: str, size: int, chat_id: int
+    name: str,
+    tag: str,
+    user_id: int,
+    username: str,
+    size: int,
+    chat_id: int,
+    public_label: str | None = None,
 ) -> str:
-    return (
+    header = (
         f"👤 <b>{html.escape(name)}</b>{tag}\n"
         f"id: {user_id} | {html.escape(username)}\n"
         f"Размер: <b>{size}</b> см\n"
         f"Чат: {chat_id}"
     )
+    if public_label:
+        header += f"\n🏷 Публичный лейбл: {html.escape(public_label)}"
+    return header
 
 
 def admin_confirm_reset_player(name: str) -> str:
@@ -1181,6 +1197,10 @@ def res_name_set(name: str) -> str:
     return f"Имя изменено на {name}."
 
 
+def res_public_label_set(label: str | None) -> str:
+    return f"Публичный лейбл установлен: {label}." if label else "Публичный лейбл удалён."
+
+
 def res_unknown_disease(disease_id: str) -> str:
     return f"Неизвестная болезнь: {disease_id}"
 
@@ -1192,6 +1212,8 @@ def res_disease_given(name: str) -> str:
 RES_CURED = "Игрок вылечен."
 RES_PLAYER_RESET = "Игрок сброшен (0 см, без болезни)."
 RES_PLAYER_NOT_FOUND = "Игрок не найден."
+RES_USER_NOT_FOUND = "Пользователь не найден."
+RES_PUBLIC_LABEL_INVALID = "Некорректный публичный лейбл."
 RES_PLAYER_DELETED = "Игрок удалён из чата."
 RES_CANT_BAN_ADMIN = "Нельзя забанить глобального администратора."
 RES_CHAT_NOT_FOUND = "Чат не найден."
