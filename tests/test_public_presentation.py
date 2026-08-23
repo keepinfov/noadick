@@ -123,6 +123,7 @@ def test_profile_omits_empty_optional_rows_and_escapes_name() -> None:
         stolen_total=0,
         lost_in_duels=0,
         diseases_caught=0,
+        public_label=None,
     )
 
     result = public.profile(stats, user_id=3)

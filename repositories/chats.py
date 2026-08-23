@@ -180,6 +180,23 @@ async def get_user(user_id: int) -> User | None:
         return await session.get(User, user_id)
 
 
+async def get_user_public_label(user_id: int) -> str | None:
+    user = await get_user(user_id)
+    return user.public_label if user else None
+
+
+async def set_user_public_label(user_id: int, label: str | None) -> None:
+    normalized = label.strip() if label else ""
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            user = User(user_id=user_id, first_name=str(user_id))
+            session.add(user)
+        user.public_label = normalized or None
+        await session.commit()
+
+
 async def set_user_banned(
     user_id: int,
     banned: bool,

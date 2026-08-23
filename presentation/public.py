@@ -280,13 +280,17 @@ def profile(
     disease: str = "",
 ) -> str:
     name = mention(user_id, stats.name)
-    lines = [
-        f"🍆 <b>Профиль</b> · {name}",
-        "",
-        "<b>Длина</b>",
-        f"{stats.current_size} см · #{stats.rank}",
-        f"Рост +{stats.total_grown} / потери −{stats.total_lost}",
-    ]
+    lines = [f"🍆 <b>Профиль</b> · {name}"]
+    if public_label := (stats.public_label or "").strip():
+        lines.append(f"🏷 <b>От разработчиков:</b> {html.escape(public_label)}")
+    lines.extend(
+        [
+            "",
+            "<b>Длина</b>",
+            f"{stats.current_size} см · #{stats.rank}",
+            f"Рост +{stats.total_grown} / потери −{stats.total_lost}",
+        ]
+    )
     if stats.best_day is not None and stats.worst_day is not None:
         lines.append(f"Бросок: лучший {signed(stats.best_day)} · худший {signed(stats.worst_day)}")
     lines.extend(
@@ -316,6 +320,8 @@ def profile(
 
 def global_profile(stats) -> str:
     lines = [f"🌐 <b>{html.escape(stats.name)}</b>"]
+    if public_label := (stats.public_label or "").strip():
+        lines.append(f"🏷 <b>От разработчиков:</b> {html.escape(public_label)}")
     if stats.is_banned:
         reason = html.escape(stats.ban_reason or "без причины")
         until = (

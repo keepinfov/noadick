@@ -55,10 +55,12 @@ class ProfileStats:
     diseases_caught: int
     current_disease: str | None
     exists: bool
+    public_label: str | None = None
 
 
 async def compute_profile(chat_id: int, user_id: int) -> ProfileStats:
     player = await P.get_player(chat_id, user_id)
+    user = await C.get_user(user_id)
     rank = await P.get_rank(chat_id, user_id)
     wealth_rows = await wealth.chat_rows(chat_id)
     wealth_entry = next((row for row in wealth_rows if row.user_id == user_id), None)
@@ -125,6 +127,7 @@ async def compute_profile(chat_id: int, user_id: int) -> ProfileStats:
         diseases_caught=diseases,
         current_disease=player.disease_id if player else None,
         exists=player is not None,
+        public_label=user.public_label if user else None,
     )
 
 
@@ -159,6 +162,7 @@ class GlobalProfileStats:
     ban_reason: str | None
     ban_until: int | None
     exists: bool
+    public_label: str | None = None
 
 
 async def compute_global_profile(user_id: int, name: str | None = None) -> GlobalProfileStats:
@@ -231,6 +235,7 @@ async def compute_global_profile(user_id: int, name: str | None = None) -> Globa
         ban_reason=ban_reason if is_banned else None,
         ban_until=ban_until if is_banned else None,
         exists=exists,
+        public_label=user.public_label if user else None,
     )
 
 
