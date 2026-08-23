@@ -648,7 +648,7 @@ async def _active_insurance_amounts_in(
     return {int(user_id): int(amount) for user_id, amount in rows}
 
 
-async def _bail_in_in(
+async def apply_bail_in_in(
     session: AsyncSession,
     chat_id: int,
     now: int,
@@ -699,13 +699,14 @@ async def _bail_in_in(
     )
 
 
-async def _record_bail_in_in(
+async def record_bail_in_in(
     session: AsyncSession,
     chat_id: int,
     info: BailInInfo,
     *,
     initiator_user_id: int = 0,
     force: bool = False,
+    source: str = "withdrawal",
 ) -> None:
     """Book one global bail-in after its final payout state is known."""
     if info.wiped <= 0 and not force:
@@ -720,6 +721,7 @@ async def _record_bail_in_in(
         "deficit": info.deficit,
         "status": info.status,
         "initiator_user_id": initiator_user_id,
+        "source": source,
     }
     await repo.corp_apply_in(
         session,
@@ -810,7 +812,7 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
                 liability = await repo.deposit_liability_in(session, chat_id)
                 remaining_liability = max(0, liability - w - accrued_share)
                 if corp.balance - credited < required_reserve(remaining_liability, cfg):
-                    bail_in = await _bail_in_in(
+                    bail_in = await apply_bail_in_in(
                         session,
                         chat_id,
                         _now(),
@@ -899,7 +901,7 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
                 meta=withdraw_meta,
             )
             if bail_in is not None:
-                await _record_bail_in_in(
+                await record_bail_in_in(
                     session,
                     chat_id,
                     bail_in,
@@ -1576,8 +1578,8 @@ async def _bail_in(chat_id: int, now: int) -> BailInInfo:
     async with players_repo.get_chat_lock(chat_id), repo.corp_lock(chat_id):
         factory = get_session_factory()
         async with factory() as session, session.begin():
-            info = await _bail_in_in(session, chat_id, now, cfg)
-            await _record_bail_in_in(session, chat_id, info, force=True)
+            info = await apply_bail_in_in(session, chat_id, now, cfg)
+            await record_bail_in_in(session, chat_id, info, force=True)
             return info
 
 
@@ -1596,8 +1598,8 @@ async def _run_corporation_crises(bot, now: int) -> None:
             async with factory() as session, session.begin():
                 corp = await repo.ensure_corp_in(session, snapshot.chat_id)
                 if corp.status == "sanation":
-                    legacy_info = await _bail_in_in(session, snapshot.chat_id, now, cfg)
-                    await _record_bail_in_in(session, snapshot.chat_id, legacy_info, force=True)
+                    legacy_info = await apply_bail_in_in(session, snapshot.chat_id, now, cfg)
+                    await record_bail_in_in(session, snapshot.chat_id, legacy_info, force=True)
                 elif corp.status == "recovery":
                     liability = await repo.deposit_liability_in(session, snapshot.chat_id)
                     deficit = max(

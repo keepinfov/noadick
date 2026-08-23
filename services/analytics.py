@@ -101,6 +101,7 @@ SIZE_EVENT_TYPES = {
     E.POKER_BUYIN,
     E.POKER_TOPUP,
     E.POKER_CASHOUT,
+    E.CASINO_SPIN,
 }
 
 
@@ -378,6 +379,8 @@ def _wealth_delta(event: Event) -> int:
         return -int(meta.get("interest", 0))
     if event.type == E.POKER_RESULT:
         return int(meta.get("net", 0))
+    if event.type == E.CASINO_SPIN:
+        return int(meta.get("net", event.delta))
     return 0
 
 
