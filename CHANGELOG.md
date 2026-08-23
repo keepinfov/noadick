@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Casino repeat controls now appear below the settled result instead of below
+  the animated Telegram slot sticker.
 - Casino wins and losses participate in the chat-local economy and seasonal
   wealth timeline; an unfundable win triggers the same immediate deposit
   bail-in and recovery mode as an unfundable withdrawal.

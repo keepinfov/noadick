@@ -115,9 +115,6 @@ async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlem
         timeline.append("settled")
         return _result()
 
-    async def edit_markup(**_kwargs):
-        timeline.append("keyboard")
-
     async def sleep(seconds):
         assert seconds == 3.0
         timeline.append("sleep")
@@ -127,7 +124,6 @@ async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlem
 
     monkeypatch.setattr(handler.casino, "play", play)
     monkeypatch.setattr(handler.asyncio, "sleep", sleep)
-    bot.edit_message_reply_markup.side_effect = edit_markup
     bot.send_message.side_effect = send_message
 
     await handler.cmd_casino(message, SimpleNamespace(args=None), bot)
@@ -137,9 +133,15 @@ async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlem
         emoji="🎰",
         message_thread_id=77,
     )
-    assert timeline == ["settled", "keyboard", "sleep", "result"]
+    assert timeline == ["settled", "sleep", "result"]
+    bot.edit_message_reply_markup.assert_not_awaited()
     result_call = bot.send_message.await_args
     assert result_call.kwargs["message_thread_id"] == 77
+    result_buttons = result_call.kwargs["reply_markup"].inline_keyboard[0]
+    assert [button.text for button in result_buttons] == [
+        "🎰 Крутить 10",
+        "🎯 Крутить свою",
+    ]
     assert "&lt;Вася &amp; Co&gt;" in result_call.args[1]
     assert "<Вася & Co>" not in result_call.args[1]
 
@@ -369,9 +371,11 @@ async def test_expired_callback_after_commit_does_not_hide_result(
     )
 
     callback.answer.assert_awaited_once_with()
-    bot.edit_message_reply_markup.assert_awaited_once()
+    bot.edit_message_reply_markup.assert_not_awaited()
     sleep.assert_awaited_once_with(3.0)
     bot.send_message.assert_awaited_once()
+    result_call = bot.send_message.await_args
+    assert result_call.kwargs["reply_markup"] == handler._spin_keyboard(10)
 
 
 def test_casino_result_and_bail_in_notice_escape_names_and_hide_deposits() -> None:

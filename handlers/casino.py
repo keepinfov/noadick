@@ -172,17 +172,6 @@ async def _run_spin(
 
     await _acknowledge(callback)
 
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=message.chat.id,
-            message_id=result.message_id,
-            reply_markup=_spin_keyboard(result.stake),
-        )
-    except TelegramAPIError:
-        # The spin is already committed; a missing convenience keyboard must not
-        # turn a real result into a reported cancellation.
-        logger.warning("Could not attach public controls to casino dice")
-
     # Settlement and all economy locks have completed before this presentation
     # delay. Let Telegram's animation finish before revealing the accounting.
     await asyncio.sleep(SLOT_ANIMATION_SECONDS)
@@ -192,9 +181,10 @@ async def _run_spin(
             texts.casino_result(user.id, user.first_name, result),
             parse_mode="HTML",
             message_thread_id=thread_id,
+            reply_markup=_spin_keyboard(result.stake),
         )
     except TelegramAPIError:
-        logger.warning("Could not deliver casino result")
+        logger.warning("Could not deliver casino result and public controls")
 
     if result.bail_in is not None:
         await _send_notice(
