@@ -392,49 +392,45 @@ CASINO_RECOVERY = "🎰 Корпорация восстанавливает ка
 CASINO_SEND_FAILED = "🎰 Telegram не запустил слот. Деньги не списаны."
 CASINO_SPIN_CANCELED = "⚠️ Крутка отменена: результат не рассчитан, деньги не изменились."
 CASINO_BUTTON_INVALID = "Эта кнопка казино устарела или повреждена. Вызови /casino заново."
-
-BTN_CASINO_OWN = "🎯 Крутить свою"
+CASINO_PAYOUT_RULES = (
+    "🎰 <b>Как считаются выигрыши</b>\n"
+    "• 7️⃣7️⃣7️⃣ — выплата ×18\n"
+    "• ровно две 7️⃣ — выплата ×3\n"
+    "• три одинаковых, кроме 7️⃣, — выплата ×5\n"
+    "• остальные комбинации — ×0\n\n"
+    "Множитель применяется к ставке; выплата уже включает её. "
+    "Чистый итог = выплата − ставка."
+)
 
 
 def casino_stake_saved(stake: int) -> str:
     return (
         f"✅ Ставка казино сохранена: <b>{stake} см</b>.\n"
-        "Теперь <code>/casino</code> крутит слот с этой ставкой."
+        "Теперь <code>/casino</code> крутит слот с этой ставкой.\n"
+        "Выплаты: 7️⃣7️⃣7️⃣ ×18 · две 7️⃣ ×3 · три одинаковых ×5."
     )
 
 
-def casino_repeat_button(stake: int) -> str:
-    return f"🎰 Крутить {stake}"
+def _casino_rules_suffix(rules_url: str | None) -> str:
+    if rules_url:
+        safe_url = html.escape(rules_url, quote=True)
+        return f' · <a href="{safe_url}">Как считаются выигрыши</a>'
+    return " · 777 ×18 · две 7 ×3 · три одинаковых ×5"
+
+
+def casino_loss(stake: int, rules_url: str | None = None) -> str:
+    return f"💸 Сняли <b>{stake} см</b>{_casino_rules_suffix(rules_url)}"
 
 
 def casino_cooldown(retry_after: int) -> str:
     return f"⏳ Автомат ещё крутится. Подожди {max(1, retry_after)} сек."
 
 
-_CASINO_SYMBOLS = {
-    "bar": "BAR",
-    "grapes": "🍇",
-    "lemon": "🍋",
-    "seven": "7️⃣",
-}
-
-
-def casino_result(user_id: int, name: str, result) -> str:
-    mention = f'<a href="tg://user?id={user_id}">{html.escape(name)}</a>'
-    symbols = " · ".join(_CASINO_SYMBOLS.get(value, "?") for value in result.symbols)
-    if result.multiplier == 18:
-        title = "💥 <b>ДЖЕКПОТ ×18</b>"
-    elif result.multiplier == 5:
-        title = "✨ <b>Три одинаковых ×5</b>"
-    elif result.multiplier == 3:
-        title = "🔥 <b>Две семёрки ×3</b>"
-    else:
-        title = "💸 <b>Мимо</b>"
+def casino_result(result, rules_url: str | None = None) -> str:
     net = f"+{result.net}" if result.net > 0 else str(result.net).replace("-", "−")
     return (
-        f"{title}\n{mention}: {symbols}\n\n"
-        f"Ставка: <b>{result.stake} см</b> · выплата: <b>{result.gross_payout} см</b>\n"
-        f"Чистый итог: <b>{net} см</b> · размер: <b>{result.size_after} см</b>"
+        f"🎉 Чистыми <b>{net} см</b> · выплата <b>{result.gross_payout} см</b>"
+        f"{_casino_rules_suffix(rules_url)}"
     )
 
 

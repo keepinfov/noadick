@@ -56,19 +56,6 @@ def _result(**overrides) -> casino.CasinoResult:
     return casino.CasinoResult(**values)
 
 
-def test_public_spin_keyboard_has_repeat_and_clickers_default() -> None:
-    keyboard = handler._spin_keyboard(50)
-    buttons = keyboard.inline_keyboard[0]
-    payloads = [button.callback_data for button in buttons]
-
-    assert [button.text for button in buttons] == ["🎰 Крутить 50", "🎯 Крутить свою"]
-    assert all(payload is not None and len(payload.encode()) <= 64 for payload in payloads)
-    repeat = CasinoCallback.unpack(payloads[0])
-    own = CasinoCallback.unpack(payloads[1])
-    assert (repeat.action, repeat.stake) == ("r", 50)
-    assert (own.action, own.stake) == ("o", 0)
-
-
 @pytest.mark.parametrize("raw", ["0", "51", "-1", "+5", "1.5", "5 10", "пять"])
 async def test_casino_command_rejects_non_strict_stakes(raw: str) -> None:
     message = _message()
@@ -78,7 +65,7 @@ async def test_casino_command_rejects_non_strict_stakes(raw: str) -> None:
     message.answer.assert_awaited_once_with(texts.CASINO_BAD_STAKE)
 
 
-async def test_casino_command_saves_without_spinning_and_confirms_with_button(
+async def test_casino_command_saves_without_spinning_or_buttons_and_shows_payouts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     message = _message()
@@ -91,10 +78,13 @@ async def test_casino_command_saves_without_spinning_and_confirms_with_button(
 
     save.assert_awaited_once_with(message.chat.id, message.from_user.id, 17)
     play.assert_not_awaited()
-    markup = message.answer.await_args.kwargs["reply_markup"]
-    payload = markup.inline_keyboard[0][0].callback_data
-    assert CasinoCallback.unpack(payload) == CasinoCallback(action="r", stake=17)
-    assert "<b>17 см</b>" in message.answer.await_args.args[0]
+    message.answer.assert_awaited_once_with(
+        texts.casino_stake_saved(17),
+        parse_mode="HTML",
+    )
+    value = message.answer.await_args.args[0]
+    assert "<b>17 см</b>" in value
+    assert "×18" in value and "×3" in value and "×5" in value
 
 
 async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlement(
@@ -106,6 +96,7 @@ async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlem
         dice=SimpleNamespace(value=64),
         message_id=777,
     )
+    bot.me.return_value = SimpleNamespace(username="casino_test_bot")
     timeline: list[str] = []
 
     async def play(chat_id, user_id, supplier, *, stake=None):
@@ -137,13 +128,61 @@ async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlem
     bot.edit_message_reply_markup.assert_not_awaited()
     result_call = bot.send_message.await_args
     assert result_call.kwargs["message_thread_id"] == 77
-    result_buttons = result_call.kwargs["reply_markup"].inline_keyboard[0]
-    assert [button.text for button in result_buttons] == [
-        "🎰 Крутить 10",
-        "🎯 Крутить свою",
-    ]
-    assert "&lt;Вася &amp; Co&gt;" in result_call.args[1]
+    assert "reply_markup" not in result_call.kwargs
+    assert result_call.args[1] == (
+        "🎉 Чистыми <b>+170 см</b> · выплата <b>180 см</b> · "
+        '<a href="https://t.me/casino_test_bot?start=casino_rules">'
+        "Как считаются выигрыши</a>"
+    )
+    assert "\n" not in result_call.args[1]
     assert "<Вася & Co>" not in result_call.args[1]
+
+
+async def test_loss_is_one_compact_line_without_buttons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message(name="Проигравший", topic=78)
+    bot = AsyncMock()
+    bot.send_dice.return_value = SimpleNamespace(
+        dice=SimpleNamespace(value=2),
+        message_id=778,
+    )
+    bot.me.return_value = SimpleNamespace(username="casino_test_bot")
+
+    async def play(_chat_id, _user_id, supplier, *, stake=None):
+        await supplier()
+        return _result(
+            value=2,
+            message_id=778,
+            symbols=(casino.GRAPES, casino.BAR, casino.BAR),
+            multiplier=0,
+            gross_payout=0,
+            net=-10,
+            size_after=90,
+            corporation_balance=10,
+            deficit=0,
+        )
+
+    monkeypatch.setattr(handler.casino, "play", play)
+    sleep = AsyncMock()
+    monkeypatch.setattr(handler.asyncio, "sleep", sleep)
+
+    await handler.cmd_casino(message, SimpleNamespace(args=None), bot)
+
+    sleep.assert_awaited_once_with(3.0)
+    bot.send_message.assert_awaited_once_with(
+        message.chat.id,
+        texts.casino_loss(10, "https://t.me/casino_test_bot?start=casino_rules"),
+        parse_mode="HTML",
+        message_thread_id=78,
+    )
+    loss_text = bot.send_message.await_args.args[1]
+    assert loss_text == (
+        '💸 Сняли <b>10 см</b> · <a href="https://t.me/casino_test_bot?start=casino_rules">'
+        "Как считаются выигрыши</a>"
+    )
+    assert "\n" not in loss_text
+    assert "Проигравший" not in loss_text
 
 
 async def test_public_callback_charges_clicker_and_preserves_default_semantics(
@@ -353,6 +392,7 @@ async def test_expired_callback_after_commit_does_not_hide_result(
         dice=SimpleNamespace(value=64),
         message_id=777,
     )
+    bot.me.return_value = SimpleNamespace(username="casino_test_bot")
 
     async def play(_chat_id, _user_id, supplier, *, stake=None):
         await supplier()
@@ -375,18 +415,21 @@ async def test_expired_callback_after_commit_does_not_hide_result(
     sleep.assert_awaited_once_with(3.0)
     bot.send_message.assert_awaited_once()
     result_call = bot.send_message.await_args
-    assert result_call.kwargs["reply_markup"] == handler._spin_keyboard(10)
+    assert "reply_markup" not in result_call.kwargs
 
 
 def test_casino_result_and_bail_in_notice_escape_names_and_hide_deposits() -> None:
-    value = texts.casino_result(7, "<Вася & Co>", _result())
+    rules_url = 'https://t.me/casino_bot?start=casino_rules&unsafe="<tag>'
+    value = texts.casino_result(_result(), rules_url)
+    loss = texts.casino_loss(10, rules_url)
     notice = texts.casino_bail_in_notice("<Вася & Co>", 180, "recovery")
     unknown = texts.casino_bail_in_notice("Игрок", 10, "<broken>")
 
-    assert "&lt;Вася &amp; Co&gt;" in value
-    assert "7️⃣ · 7️⃣ · 7️⃣" in value
-    assert "ставка: <b>10 см</b>" in value.lower()
-    assert "выплата: <b>180 см</b>" in value.lower()
+    assert value.startswith("🎉 Чистыми <b>+170 см</b>")
+    assert "выплата <b>180 см</b>" in value.lower()
+    assert "\n" not in value and "\n" not in loss
+    assert "&amp;unsafe=&quot;&lt;tag&gt;" in value
+    assert "&amp;unsafe=&quot;&lt;tag&gt;" in loss
     assert "&lt;Вася &amp; Co&gt;" in notice
     assert "Статус кассы: <b>восстановление</b>" in notice
     assert "recovery" not in notice
@@ -394,6 +437,20 @@ def test_casino_result_and_bail_in_notice_escape_names_and_hide_deposits() -> No
     assert "защищ" not in notice
     assert "<broken>" not in unknown
     assert "<b>неизвестный</b>" in unknown
+
+
+async def test_casino_rules_deep_link_explains_gross_and_net_payouts() -> None:
+    message = _message(chat_type="private")
+
+    await handler.casino_rules_deep_link(message)
+
+    message.answer.assert_awaited_once_with(
+        texts.CASINO_PAYOUT_RULES,
+        parse_mode="HTML",
+    )
+    rules = message.answer.await_args.args[0]
+    assert "×18" in rules and "×3" in rules and "×5" in rules and "×0" in rules
+    assert "Чистый итог = выплата − ставка" in rules
 
 
 async def test_settings_panel_exposes_authorized_casino_toggle(

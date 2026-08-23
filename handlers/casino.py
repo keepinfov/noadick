@@ -11,8 +11,6 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
     User,
 )
@@ -25,41 +23,6 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 SLOT_ANIMATION_SECONDS = 3.0
-
-
-def _casino_callback(action: str, stake: int = 0) -> str:
-    return CasinoCallback(action=action, stake=stake).pack()
-
-
-def _spin_keyboard(stake: int) -> InlineKeyboardMarkup:
-    """Public controls: every click charges the player who clicked."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=texts.casino_repeat_button(stake),
-                    callback_data=_casino_callback("r", stake),
-                ),
-                InlineKeyboardButton(
-                    text=texts.BTN_CASINO_OWN,
-                    callback_data=_casino_callback("o"),
-                ),
-            ]
-        ]
-    )
-
-
-def _saved_keyboard(stake: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=texts.casino_repeat_button(stake),
-                    callback_data=_casino_callback("r", stake),
-                )
-            ]
-        ]
-    )
 
 
 def _thread_id(message: Message) -> int | None:
@@ -115,6 +78,18 @@ async def _send_notice(bot: Bot, message: Message, text: str) -> None:
         )
     except TelegramAPIError:
         logger.warning("Could not deliver casino notice")
+
+
+async def _casino_rules_url(bot: Bot) -> str | None:
+    """Build a private deep link without making a result depend on getMe."""
+    try:
+        username = (await bot.me()).username
+    except TelegramAPIError:
+        logger.warning("Could not resolve bot username for casino rules link")
+        return None
+    if not username:
+        return None
+    return f"https://t.me/{username}?start=casino_rules"
 
 
 async def _run_spin(
@@ -174,17 +149,22 @@ async def _run_spin(
 
     # Settlement and all economy locks have completed before this presentation
     # delay. Let Telegram's animation finish before revealing the accounting.
+    rules_url = await _casino_rules_url(bot)
     await asyncio.sleep(SLOT_ANIMATION_SECONDS)
     try:
+        result_text = (
+            texts.casino_result(result, rules_url)
+            if result.multiplier > 0
+            else texts.casino_loss(result.stake, rules_url)
+        )
         await bot.send_message(
             message.chat.id,
-            texts.casino_result(user.id, user.first_name, result),
+            result_text,
             parse_mode="HTML",
             message_thread_id=thread_id,
-            reply_markup=_spin_keyboard(result.stake),
         )
     except TelegramAPIError:
-        logger.warning("Could not deliver casino result and public controls")
+        logger.warning("Could not deliver casino result")
 
     if result.bail_in is not None:
         await _send_notice(
@@ -196,6 +176,15 @@ async def _run_spin(
                 result.bail_in.status,
             ),
         )
+
+
+@router.message(
+    Command("start"),
+    F.chat.type == "private",
+    F.text.regexp(r"^/start(?:@\w+)?\s+casino_rules$"),
+)
+async def casino_rules_deep_link(message: Message) -> None:
+    await message.answer(texts.CASINO_PAYOUT_RULES, parse_mode="HTML")
 
 
 @router.message(Command("casino"))
@@ -223,7 +212,6 @@ async def cmd_casino(message: Message, command: CommandObject, bot: Bot) -> None
             return
         await message.answer(
             texts.casino_stake_saved(saved),
-            reply_markup=_saved_keyboard(saved),
             parse_mode="HTML",
         )
         return

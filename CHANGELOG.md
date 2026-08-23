@@ -7,8 +7,8 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Group chats now have a Telegram `🎰` casino with saved 1–50 centimetre stakes,
-  public one-off/default-spin buttons, Corporation-funded payouts, and an
-  administrator switch.
+  compact loss messages, Corporation-funded payouts, and an administrator
+  switch.
 - The top three players of each completed chat season receive 10 centimetres of
   SЕКАСКО coverage for a fixed seven days measured from the season end, not a
   later finalization. Prize coverage can wait for a future deposit and never
@@ -18,8 +18,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Casino repeat controls now appear below the settled result instead of below
-  the animated Telegram slot sticker.
+- Casino wins and losses now produce one compact line without spin controls and
+  link to a private payout explanation; combinations are also shown when a
+  player saves their default stake.
 - Casino wins and losses participate in the chat-local economy and seasonal
   wealth timeline; an unfundable win triggers the same immediate deposit
   bail-in and recovery mode as an unfundable withdrawal.
