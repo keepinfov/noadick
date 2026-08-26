@@ -44,20 +44,23 @@ async def _seed(size: int = 100, **fields):
     return await players.set_player_fields(CHAT, USER, size=size, **fields)
 
 
-def test_all_telegram_values_decode_and_match_balanced_payout_table() -> None:
+async def test_all_telegram_values_decode_and_match_seeded_payout_table(db) -> None:
     from services import casino
 
+    rules = {rule.slot_value: rule for rule in await casino.list_payout_rules()}
     counts: Counter[int] = Counter()
     for value in range(1, 65):
         symbols = casino.decode_slot(value)
         assert len(symbols) == 3
         assert set(symbols) <= set(casino.SLOT_SYMBOLS)
-        counts[casino.payout_multiplier(value)] += 1
+        assert casino.encode_slot(symbols) == value
+        counts[rules[value].payout_value if value in rules else 0] += 1
 
     assert casino.decode_slot(64) == (casino.SEVEN,) * 3
-    assert casino.payout_multiplier(64) == 18
+    assert (rules[64].payout_kind, rules[64].payout_value) == ("multiplier", 18)
+    assert len(rules) == 13
     assert counts == {0: 51, 3: 9, 5: 3, 18: 1}
-    assert sum(casino.payout_multiplier(value) for value in range(1, 65)) == 60
+    assert sum(rule.payout_value for rule in rules.values()) == 60
 
 
 @pytest.mark.parametrize("value", [0, 65, -1, True, 1.5, "64"])
@@ -67,6 +70,67 @@ def test_invalid_telegram_values_are_rejected(value) -> None:
     with pytest.raises(casino.CasinoError) as error:
         casino.decode_slot(value)
     assert error.value.code == "bad_outcome"
+
+
+@pytest.mark.parametrize(
+    "symbols",
+    [(), ("bar",), ("bar", "bar"), ("bar", "bar", "bar", "bar"), ("bar", "wat", "bar")],
+)
+def test_invalid_symbol_combinations_are_rejected(symbols) -> None:
+    from services import casino
+
+    with pytest.raises(casino.CasinoError) as error:
+        casino.encode_slot(symbols)
+    assert error.value.code == "bad_outcome"
+
+
+async def test_payout_rules_create_move_reject_duplicates_and_delete(db) -> None:
+    from services import casino
+
+    with pytest.raises(casino.CasinoError) as error:
+        await casino.save_payout_rule(
+            original_slot_value=None,
+            slot_value=64,
+            payout_kind="fixed",
+            payout_value=100,
+        )
+    assert error.value.code == "duplicate_payout_rule"
+
+    moved = await casino.save_payout_rule(
+        original_slot_value=64,
+        slot_value=2,
+        payout_kind="fixed",
+        payout_value=100,
+    )
+    assert (moved.slot_value, moved.payout_kind, moved.payout_value) == (2, "fixed", 100)
+    assert await casino.get_payout_rule(64) is None
+    assert (await casino.get_payout_rule(2)).payout_value == 100
+    assert await casino.delete_payout_rule(2) is True
+    assert await casino.delete_payout_rule(2) is False
+
+
+@pytest.mark.parametrize(
+    ("slot_value", "kind", "value", "code"),
+    [
+        (0, "fixed", 10, "bad_outcome"),
+        (65, "fixed", 10, "bad_outcome"),
+        (2, "bonus", 10, "bad_payout_kind"),
+        (2, "multiplier", 101, "bad_payout_value"),
+        (2, "fixed", 5001, "bad_payout_value"),
+        (2, "fixed", True, "bad_payout_value"),
+    ],
+)
+async def test_payout_rule_validation(db, slot_value, kind, value, code) -> None:
+    from services import casino
+
+    with pytest.raises(casino.CasinoError) as error:
+        await casino.save_payout_rule(
+            original_slot_value=None,
+            slot_value=slot_value,
+            payout_kind=kind,
+            payout_value=value,
+        )
+    assert error.value.code == code
 
 
 async def test_saved_stake_defaults_persists_and_does_not_spin(db) -> None:
@@ -176,6 +240,37 @@ async def test_loss_never_bails_in_an_underreserved_healthy_corporation(db) -> N
     async with factory() as session:
         deposit = await session.get(Deposit, (CHAT, 92))
     assert (deposit.principal, deposit.accrued) == (200, 10)
+
+
+async def test_fixed_gross_payout_can_be_smaller_than_stake_and_is_recorded(db) -> None:
+    from db.engine import get_session_factory
+    from db.models import Event
+    from repositories import players
+    from services import casino
+
+    await _seed(size=100, casino_stake=10)
+    await casino.save_payout_rule(
+        original_slot_value=None,
+        slot_value=2,
+        payout_kind="fixed",
+        payout_value=7,
+    )
+
+    async def outcome():
+        return casino.SlotOutcome(2, message_id=778)
+
+    result = await casino.play(CHAT, USER, outcome, now=1_800_000_075)
+    assert (result.payout_kind, result.payout_value, result.multiplier) == ("fixed", 7, 0)
+    assert (result.gross_payout, result.net, result.size_after) == (7, -3, 97)
+    assert (await players.get_player(CHAT, USER)).size == 97
+    factory = get_session_factory()
+    async with factory() as session:
+        event = (
+            await session.execute(select(Event).where(Event.type == "casino_spin"))
+        ).scalar_one()
+    assert event.meta["payout_kind"] == "fixed"
+    assert event.meta["payout_value"] == 7
+    assert event.meta["multiplier"] == 0
 
 
 async def test_one_off_stake_wins_without_changing_saved_default_or_garnishing(db) -> None:
@@ -458,3 +553,35 @@ def test_0009_migration_roundtrip_and_defaults(tmp_path: Path) -> None:
     players, chat_settings = _casino_columns(path)
     assert {"casino_stake", "last_casino_spin_at"} <= players.keys()
     assert "casino_enabled" in chat_settings
+
+
+def test_0011_migration_seeds_current_rules_and_enforces_bounds(tmp_path: Path) -> None:
+    path = tmp_path / "casino-0010.db"
+    config = _migration_config(path)
+    command.upgrade(config, "0010_public_profile_label")
+    command.upgrade(config, "head")
+
+    with sqlite3.connect(path) as database:
+        rules = database.execute(
+            "SELECT slot_value, payout_kind, payout_value "
+            "FROM casino_payout_rules ORDER BY slot_value"
+        ).fetchall()
+        assert len(rules) == 13
+        assert rules[-1] == (64, "multiplier", 18)
+        assert sum(rule[2] for rule in rules) == 60
+        with pytest.raises(sqlite3.IntegrityError):
+            database.execute(
+                "INSERT INTO casino_payout_rules "
+                "(slot_value, payout_kind, payout_value) VALUES (2, 'multiplier', 101)"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            database.execute(
+                "INSERT INTO casino_payout_rules "
+                "(slot_value, payout_kind, payout_value) VALUES (65, 'fixed', 10)"
+            )
+
+    command.downgrade(config, "0010_public_profile_label")
+    with sqlite3.connect(path) as database:
+        assert "casino_payout_rules" not in {
+            row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }

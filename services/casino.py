@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable
@@ -10,8 +11,9 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.engine import get_session_factory
-from db.models import ChatCorporation, ChatSettings, Player
+from db.models import CasinoPayoutRule, ChatCorporation, ChatSettings, Player
 from repositories import bank as bank_repo
+from repositories import casino_payouts as payouts_repo
 from repositories import events as E
 from repositories import players as players_repo
 from services import settings
@@ -33,6 +35,11 @@ GRAPES = "grapes"
 LEMON = "lemon"
 SEVEN = "seven"
 SLOT_SYMBOLS = (BAR, GRAPES, LEMON, SEVEN)
+PAYOUT_KINDS = ("multiplier", "fixed")
+MAX_MULTIPLIER = 100
+MAX_FIXED_PAYOUT = 5000
+
+_rules_lock = asyncio.Lock()
 
 
 class CasinoError(Exception):
@@ -63,6 +70,8 @@ class CasinoResult:
     corporation_balance: int
     deficit: int
     bail_in: BailInInfo | None = None
+    payout_kind: str | None = None
+    payout_value: int = 0
 
 
 OutcomeSupplier = Callable[[], Awaitable[int | SlotOutcome]]
@@ -88,15 +97,100 @@ def decode_slot(value: int) -> tuple[str, str, str]:
     )
 
 
-def payout_multiplier(value: int) -> int:
-    symbols = decode_slot(value)
-    if symbols == (SEVEN, SEVEN, SEVEN):
-        return 18
-    if symbols.count(SEVEN) == 2:
-        return 3
-    if len(set(symbols)) == 1:
-        return 5
-    return 0
+def encode_slot(symbols: tuple[str, str, str]) -> int:
+    if not isinstance(symbols, tuple) or len(symbols) != 3:
+        raise CasinoError("bad_outcome")
+    try:
+        values = tuple(SLOT_SYMBOLS.index(symbol) for symbol in symbols)
+    except ValueError as error:
+        raise CasinoError("bad_outcome") from error
+    return 1 + values[0] + (values[1] << 2) + (values[2] << 4)
+
+
+def _validate_rule(slot_value: int, payout_kind: str, payout_value: int) -> None:
+    decode_slot(slot_value)
+    if payout_kind not in PAYOUT_KINDS:
+        raise CasinoError("bad_payout_kind")
+    if isinstance(payout_value, bool) or not isinstance(payout_value, int):
+        raise CasinoError("bad_payout_value")
+    maximum = MAX_MULTIPLIER if payout_kind == "multiplier" else MAX_FIXED_PAYOUT
+    if not 0 <= payout_value <= maximum:
+        raise CasinoError("bad_payout_value")
+
+
+def _gross_payout(stake: int, rule: CasinoPayoutRule | None) -> tuple[int, int]:
+    if rule is None:
+        return 0, 0
+    if rule.payout_kind == "multiplier":
+        return stake * int(rule.payout_value), int(rule.payout_value)
+    if rule.payout_kind == "fixed":
+        return int(rule.payout_value), 0
+    raise RuntimeError("invalid persisted casino payout kind")
+
+
+async def list_payout_rules(*, offset: int = 0, limit: int | None = None) -> list[CasinoPayoutRule]:
+    return await payouts_repo.list_rules(offset=offset, limit=limit)
+
+
+async def count_payout_rules() -> int:
+    return await payouts_repo.count_rules()
+
+
+async def get_payout_rule(slot_value: int) -> CasinoPayoutRule | None:
+    decode_slot(slot_value)
+    return await payouts_repo.get_rule(slot_value)
+
+
+async def save_payout_rule(
+    *,
+    original_slot_value: int | None,
+    slot_value: int,
+    payout_kind: str,
+    payout_value: int,
+) -> CasinoPayoutRule:
+    """Create or update one rule, atomically moving it to a new combination."""
+    _validate_rule(slot_value, payout_kind, payout_value)
+    if original_slot_value is not None:
+        decode_slot(original_slot_value)
+
+    async with _rules_lock:
+        factory = get_session_factory()
+        async with factory() as session, session.begin():
+            target = await payouts_repo.get_rule_in(session, slot_value)
+            if original_slot_value is None:
+                if target is not None:
+                    raise CasinoError("duplicate_payout_rule")
+                rule = CasinoPayoutRule(slot_value=slot_value)
+                session.add(rule)
+            else:
+                original = await payouts_repo.get_rule_in(session, original_slot_value)
+                if original is None:
+                    raise CasinoError("missing_payout_rule")
+                if original_slot_value != slot_value and target is not None:
+                    raise CasinoError("duplicate_payout_rule")
+                if original_slot_value == slot_value:
+                    rule = original
+                else:
+                    await session.delete(original)
+                    await session.flush()
+                    rule = CasinoPayoutRule(slot_value=slot_value)
+                    session.add(rule)
+            rule.payout_kind = payout_kind
+            rule.payout_value = payout_value
+            await session.flush()
+        return rule
+
+
+async def delete_payout_rule(slot_value: int) -> bool:
+    decode_slot(slot_value)
+    async with _rules_lock:
+        factory = get_session_factory()
+        async with factory() as session, session.begin():
+            rule = await payouts_repo.get_rule_in(session, slot_value)
+            if rule is None:
+                return False
+            await session.delete(rule)
+        return True
 
 
 async def get_stake(chat_id: int, user_id: int) -> int:
@@ -184,9 +278,9 @@ async def _settle(
     if corp.status != "healthy":
         raise CasinoError("corp_frozen")
 
-    multiplier = payout_multiplier(outcome.value)
     symbols = decode_slot(outcome.value)
-    gross_payout = stake * multiplier
+    payout_rule = await payouts_repo.get_rule_in(session, outcome.value)
+    gross_payout, multiplier = _gross_payout(stake, payout_rule)
     net = gross_payout - stake
     liability = await bank_repo.deposit_liability_in(session, chat_id)
     projected_balance = int(corp.balance) - net
@@ -236,6 +330,8 @@ async def _settle(
         "symbols": list(symbols),
         "stake": stake,
         "multiplier": multiplier,
+        "payout_kind": payout_rule.payout_kind if payout_rule is not None else None,
+        "payout_value": int(payout_rule.payout_value) if payout_rule is not None else 0,
         "gross_payout": gross_payout,
         "net": net,
         "balance": final_balance,
@@ -283,6 +379,8 @@ async def _settle(
         corporation_balance=final_balance,
         deficit=deficit,
         bail_in=bail_in,
+        payout_kind=payout_rule.payout_kind if payout_rule is not None else None,
+        payout_value=int(payout_rule.payout_value) if payout_rule is not None else 0,
     )
 
 

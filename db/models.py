@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -488,6 +489,29 @@ class GlobalSettings(Base):
     credit_reward_min_age_days: Mapped[int] = mapped_column(Integer, default=3)
     credit_reward_cooldown_days: Mapped[int] = mapped_column(Integer, default=14)
     credit_reward_min_limit_pct: Mapped[int] = mapped_column(Integer, default=25)
+    updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
+
+
+class CasinoPayoutRule(Base):
+    """One exact Telegram slot outcome and its global gross-payout rule."""
+
+    __tablename__ = "casino_payout_rules"
+    __table_args__ = (
+        CheckConstraint(
+            "slot_value BETWEEN 1 AND 64",
+            name="ck_casino_payout_rules_slot_value",
+        ),
+        CheckConstraint(
+            "(payout_kind = 'multiplier' AND payout_value BETWEEN 0 AND 100) "
+            "OR (payout_kind = 'fixed' AND payout_value BETWEEN 0 AND 5000)",
+            name="ck_casino_payout_rules_kind_value",
+        ),
+    )
+
+    slot_value: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payout_kind: Mapped[str] = mapped_column(String(16))
+    payout_value: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer, default=_now)
     updated_at: Mapped[int] = mapped_column(Integer, default=_now, onupdate=_now)
 
 
