@@ -70,21 +70,25 @@ async def test_casino_command_saves_without_spinning_or_buttons_and_shows_payout
 ) -> None:
     message = _message()
     save = AsyncMock(return_value=17)
+    count = AsyncMock(return_value=13)
     play = AsyncMock()
     monkeypatch.setattr(handler.casino, "save_stake", save)
+    monkeypatch.setattr(handler.casino, "count_payout_rules", count)
     monkeypatch.setattr(handler.casino, "play", play)
 
     await handler.cmd_casino(message, SimpleNamespace(args="17"), AsyncMock())
 
     save.assert_awaited_once_with(message.chat.id, message.from_user.id, 17)
+    count.assert_awaited_once_with()
     play.assert_not_awaited()
     message.answer.assert_awaited_once_with(
-        texts.casino_stake_saved(17),
+        texts.casino_stake_saved(17, 13),
         parse_mode="HTML",
     )
     value = message.answer.await_args.args[0]
     assert "<b>17 см</b>" in value
-    assert "×18" in value and "×3" in value and "×5" in value
+    assert "<b>13</b>" in value
+    assert "×18" not in value and "×3" not in value and "×5" not in value
 
 
 async def test_no_argument_spin_uses_saved_default_topic_and_waits_after_settlement(
@@ -183,6 +187,40 @@ async def test_loss_is_one_compact_line_without_buttons(
     )
     assert "\n" not in loss_text
     assert "Проигравший" not in loss_text
+
+
+async def test_fixed_positive_payout_uses_result_line_even_with_zero_multiplier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message(topic=79)
+    bot = AsyncMock()
+    bot.send_dice.return_value = SimpleNamespace(dice=SimpleNamespace(value=2), message_id=779)
+    bot.me.return_value = SimpleNamespace(username="casino_test_bot")
+
+    async def play(_chat_id, _user_id, supplier, *, stake=None):
+        await supplier()
+        return _result(
+            value=2,
+            message_id=779,
+            symbols=(casino.GRAPES, casino.BAR, casino.BAR),
+            multiplier=0,
+            payout_kind="fixed",
+            payout_value=7,
+            gross_payout=7,
+            net=-3,
+            size_after=97,
+            corporation_balance=3,
+            deficit=0,
+        )
+
+    monkeypatch.setattr(handler.casino, "play", play)
+    monkeypatch.setattr(handler.asyncio, "sleep", AsyncMock())
+
+    await handler.cmd_casino(message, SimpleNamespace(args=None), bot)
+
+    result_text = bot.send_message.await_args.args[1]
+    assert result_text.startswith("🎉 Чистыми <b>−3 см</b> · выплата <b>7 см</b>")
+    assert "💸 Сняли" not in result_text
 
 
 async def test_public_callback_charges_clicker_and_preserves_default_semantics(
@@ -439,17 +477,21 @@ def test_casino_result_and_bail_in_notice_escape_names_and_hide_deposits() -> No
     assert "<b>неизвестный</b>" in unknown
 
 
-async def test_casino_rules_deep_link_explains_gross_and_net_payouts() -> None:
+async def test_casino_rules_deep_link_uses_current_database_rules(monkeypatch) -> None:
     message = _message(chat_type="private")
+    rules = [
+        SimpleNamespace(slot_value=1, payout_kind="multiplier", payout_value=5),
+        SimpleNamespace(slot_value=2, payout_kind="fixed", payout_value=7),
+    ]
+    monkeypatch.setattr(handler.casino, "list_payout_rules", AsyncMock(return_value=rules))
 
     await handler.casino_rules_deep_link(message)
 
-    message.answer.assert_awaited_once_with(
-        texts.CASINO_PAYOUT_RULES,
-        parse_mode="HTML",
-    )
+    message.answer.assert_awaited_once()
     rules = message.answer.await_args.args[0]
-    assert "×18" in rules and "×3" in rules and "×5" in rules and "×0" in rules
+    assert "BAR · BAR · BAR — ×5" in rules
+    assert "🍇 · BAR · BAR — 7 см" in rules
+    assert "×18" not in rules
     assert "Чистый итог = выплата − ставка" in rules
 
 

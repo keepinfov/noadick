@@ -31,7 +31,7 @@ from repositories import broadcasts as broadcasts_repo
 from repositories import chats as chats_repo
 from repositories import players as players_repo
 from repositories import threads as threads_repo
-from services import admin_actions, economy_metrics, global_settings, settings_view
+from services import admin_actions, casino, economy_metrics, global_settings, settings_view
 from services.admins import admin_ids
 from services.global_settings import get_config
 
@@ -62,10 +62,19 @@ class AdminStates(StatesGroup):
     ban_duration = State()
     filter_chats = State()
     filter_players = State()
+    casino_payout_edit = State()
 
 
 CHAT_SORT_CODES = {c for c, _ in texts.CHAT_SORTS}
 PLAYER_SORT_CODES = {c for c, _ in texts.PLAYER_SORTS}
+CASINO_PAYOUTS_PER_PAGE = 8
+CASINO_DRAFT_KEY = "casino_payout_draft"
+CASINO_SYMBOL_CODES = {
+    "b": casino.BAR,
+    "g": casino.GRAPES,
+    "l": casino.LEMON,
+    "s": casino.SEVEN,
+}
 
 
 BAN_REASONS = texts.BAN_REASONS
@@ -103,6 +112,12 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text=texts.BTN_ECONOMY, callback_data="adm:economy"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_CASINO_PAYOUTS,
+                    callback_data="adm:cpay:0",
+                ),
             ],
             [
                 InlineKeyboardButton(text=texts.BTN_GLOBAL_SETTINGS, callback_data="adm:gset"),
@@ -1014,6 +1029,399 @@ async def cb_economy(callback: CallbackQuery) -> None:
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
     )
     await _edit(callback, texts.admin_economy(report), kb)
+
+
+# ---- configurable global casino payout rules ----
+
+
+def _casino_rule_button(rule) -> str:
+    symbols = casino.decode_slot(rule.slot_value)
+    payout = texts.casino_payout_label(rule.payout_kind, rule.payout_value)
+    return f"{texts.casino_combination(symbols)} — {payout}"
+
+
+async def render_casino_payouts(page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    total = await casino.count_payout_rules()
+    pages = max(1, math.ceil(total / CASINO_PAYOUTS_PER_PAGE))
+    page = max(0, min(page, pages - 1))
+    rules = await casino.list_payout_rules(
+        offset=page * CASINO_PAYOUTS_PER_PAGE,
+        limit=CASINO_PAYOUTS_PER_PAGE,
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_casino_rule_button(rule),
+                callback_data=f"adm:cpedit:{rule.slot_value}:{page}",
+            )
+        ]
+        for rule in rules
+    ]
+    nav = _pager("adm:cpay", page, total, CASINO_PAYOUTS_PER_PAGE)
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"adm:cpnew:{page}")])
+    rows.append([InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")])
+    return texts.admin_casino_payouts(total, page, pages), InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def _casino_draft(data: dict) -> dict | None:
+    draft = data.get(CASINO_DRAFT_KEY)
+    if not isinstance(draft, dict):
+        return None
+    symbols = draft.get("symbols")
+    payout_kind = draft.get("payout_kind")
+    payout_value = draft.get("payout_value")
+    original = draft.get("original_slot_value")
+    page = draft.get("page")
+    if (
+        not isinstance(symbols, list)
+        or len(symbols) != 3
+        or payout_kind not in casino.PAYOUT_KINDS
+        or isinstance(payout_value, bool)
+        or not isinstance(payout_value, int)
+        or not 0
+        <= payout_value
+        <= (casino.MAX_MULTIPLIER if payout_kind == "multiplier" else casino.MAX_FIXED_PAYOUT)
+        or (original is not None and not isinstance(original, int))
+        or isinstance(original, bool)
+        or isinstance(page, bool)
+        or not isinstance(page, int)
+    ):
+        return None
+    try:
+        casino.encode_slot(tuple(symbols))
+        if original is not None:
+            casino.decode_slot(original)
+    except casino.CasinoError:
+        return None
+    return draft
+
+
+async def _get_casino_draft(callback: CallbackQuery, state: FSMContext) -> dict | None:
+    draft = _casino_draft(await state.get_data())
+    if draft is None:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+    return draft
+
+
+async def _save_casino_draft(state: FSMContext, draft: dict) -> None:
+    await state.update_data(**{CASINO_DRAFT_KEY: draft})
+
+
+def render_casino_payout_editor(draft: dict) -> tuple[str, InlineKeyboardMarkup]:
+    symbols = tuple(draft["symbols"])
+    payout_kind = draft["payout_kind"]
+    payout_value = draft["payout_value"]
+    original = draft["original_slot_value"]
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"{position + 1}: {texts.CASINO_SYMBOL_LABELS[symbol]}",
+                callback_data=f"adm:cpreel:{position}",
+            )
+            for position, symbol in enumerate(symbols)
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{'✅ ' if payout_kind == 'multiplier' else ''}× ставка",
+                callback_data="adm:cpkind:m",
+            ),
+            InlineKeyboardButton(
+                text=f"{'✅ ' if payout_kind == 'fixed' else ''}фикс. см",
+                callback_data="adm:cpkind:f",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Выплата: {texts.casino_payout_label(payout_kind, payout_value)}",
+                callback_data="adm:noop",
+            )
+        ],
+    ]
+    steps = (10, 1) if payout_kind == "multiplier" else (100, 10)
+    rows.append(
+        [
+            InlineKeyboardButton(text=f"−{steps[0]}", callback_data=f"adm:cpadj:{-steps[0]}"),
+            InlineKeyboardButton(text=f"−{steps[1]}", callback_data=f"adm:cpadj:{-steps[1]}"),
+            InlineKeyboardButton(text=f"+{steps[1]}", callback_data=f"adm:cpadj:{steps[1]}"),
+            InlineKeyboardButton(text=f"+{steps[0]}", callback_data=f"adm:cpadj:{steps[0]}"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(text="✅ Сохранить", callback_data="adm:cpsave"),
+            InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="adm:cpcancel"),
+        ]
+    )
+    if original is not None:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить", callback_data="adm:cpdelask")])
+    return texts.admin_casino_rule_editor(
+        is_new=original is None,
+        symbols=symbols,
+        payout_kind=payout_kind,
+        payout_value=payout_value,
+    ), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def render_casino_symbol_picker(position: int) -> tuple[str, InlineKeyboardMarkup]:
+    items = list(CASINO_SYMBOL_CODES.items())
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=texts.CASINO_SYMBOL_LABELS[symbol],
+                callback_data=f"adm:cpsym:{position}:{code}",
+            )
+            for code, symbol in items[start : start + 2]
+        ]
+        for start in range(0, len(items), 2)
+    ]
+    rows.append([InlineKeyboardButton(text=texts.BTN_BACK, callback_data="adm:cpbackedit")])
+    return texts.admin_casino_symbol_picker(position), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _start_casino_editor(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    original_slot_value: int | None,
+    symbols: tuple[str, str, str],
+    payout_kind: str,
+    payout_value: int,
+    page: int,
+) -> None:
+    draft = {
+        "original_slot_value": original_slot_value,
+        "symbols": list(symbols),
+        "payout_kind": payout_kind,
+        "payout_value": payout_value,
+        "page": max(0, page),
+    }
+    await state.clear()
+    await state.set_state(AdminStates.casino_payout_edit)
+    await _save_casino_draft(state, draft)
+    text, kb = render_casino_payout_editor(draft)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:cpay:"))
+async def cb_casino_payouts(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        page = int((callback.data or "").split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    await state.clear()
+    text, kb = await render_casino_payouts(page)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:cpnew:"))
+async def cb_casino_payout_new(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        page = int((callback.data or "").split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    used = {rule.slot_value for rule in await casino.list_payout_rules()}
+    slot_value = next((value for value in range(1, 65) if value not in used), None)
+    if slot_value is None:
+        await callback.answer(texts.ADMIN_CASINO_RULES_FULL, show_alert=True)
+        return
+    await _start_casino_editor(
+        callback,
+        state,
+        original_slot_value=None,
+        symbols=casino.decode_slot(slot_value),
+        payout_kind="multiplier",
+        payout_value=1,
+        page=page,
+    )
+
+
+@router.callback_query(F.data.startswith("adm:cpedit:"))
+async def cb_casino_payout_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, raw_slot, raw_page = (callback.data or "").split(":")
+        slot_value, page = int(raw_slot), int(raw_page)
+        casino.decode_slot(slot_value)
+    except (ValueError, casino.CasinoError):
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    rule = await casino.get_payout_rule(slot_value)
+    if rule is None:
+        await callback.answer(texts.ADMIN_CASINO_RULE_MISSING, show_alert=True)
+        return
+    await _start_casino_editor(
+        callback,
+        state,
+        original_slot_value=slot_value,
+        symbols=casino.decode_slot(slot_value),
+        payout_kind=rule.payout_kind,
+        payout_value=rule.payout_value,
+        page=page,
+    )
+
+
+@router.callback_query(F.data.startswith("adm:cpreel:"))
+async def cb_casino_payout_reel(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    try:
+        position = int((callback.data or "").split(":")[2])
+    except (IndexError, ValueError):
+        position = -1
+    if position not in {0, 1, 2}:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    text, kb = render_casino_symbol_picker(position)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:cpsym:"))
+async def cb_casino_payout_symbol(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    try:
+        _, _, raw_position, code = (callback.data or "").split(":")
+        position = int(raw_position)
+        symbol = CASINO_SYMBOL_CODES[code]
+    except (KeyError, ValueError):
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    if position not in {0, 1, 2}:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    draft["symbols"][position] = symbol
+    await _save_casino_draft(state, draft)
+    text, kb = render_casino_payout_editor(draft)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:cpbackedit")
+async def cb_casino_payout_back(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    text, kb = render_casino_payout_editor(draft)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:cpkind:"))
+async def cb_casino_payout_kind(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    code = (callback.data or "").split(":")[-1]
+    payout_kind = {"m": "multiplier", "f": "fixed"}.get(code)
+    if payout_kind is None:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    maximum = casino.MAX_MULTIPLIER if payout_kind == "multiplier" else casino.MAX_FIXED_PAYOUT
+    draft["payout_kind"] = payout_kind
+    draft["payout_value"] = min(draft["payout_value"], maximum)
+    await _save_casino_draft(state, draft)
+    text, kb = render_casino_payout_editor(draft)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:cpadj:"))
+async def cb_casino_payout_adjust(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    try:
+        delta = int((callback.data or "").split(":")[2])
+    except (IndexError, ValueError):
+        delta = 0
+    allowed = {"multiplier": {-10, -1, 1, 10}, "fixed": {-100, -10, 10, 100}}
+    payout_kind = draft["payout_kind"]
+    if delta not in allowed[payout_kind]:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    maximum = casino.MAX_MULTIPLIER if payout_kind == "multiplier" else casino.MAX_FIXED_PAYOUT
+    draft["payout_value"] = max(0, min(maximum, draft["payout_value"] + delta))
+    await _save_casino_draft(state, draft)
+    text, kb = render_casino_payout_editor(draft)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:cpsave")
+async def cb_casino_payout_save(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    slot_value = casino.encode_slot(tuple(draft["symbols"]))
+    try:
+        await casino.save_payout_rule(
+            original_slot_value=draft["original_slot_value"],
+            slot_value=slot_value,
+            payout_kind=draft["payout_kind"],
+            payout_value=draft["payout_value"],
+        )
+    except casino.CasinoError as error:
+        message = (
+            texts.ADMIN_CASINO_RULE_DUPLICATE
+            if error.code == "duplicate_payout_rule"
+            else texts.ADMIN_CASINO_RULE_MISSING
+        )
+        await callback.answer(message, show_alert=True)
+        return
+    page = draft["page"]
+    await state.clear()
+    text, kb = await render_casino_payouts(page)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:cpcancel")
+async def cb_casino_payout_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    page = draft["page"]
+    await state.clear()
+    text, kb = await render_casino_payouts(page)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:cpdelask")
+async def cb_casino_payout_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    original = draft["original_slot_value"]
+    if original is None:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=texts.BTN_YES, callback_data="adm:cpdelete"),
+                InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="adm:cpbackedit"),
+            ]
+        ]
+    )
+    await _edit(callback, texts.admin_casino_delete_confirm(casino.decode_slot(original)), kb)
+
+
+@router.callback_query(F.data == "adm:cpdelete")
+async def cb_casino_payout_delete(callback: CallbackQuery, state: FSMContext) -> None:
+    draft = await _get_casino_draft(callback, state)
+    if draft is None:
+        return
+    original = draft["original_slot_value"]
+    if original is None:
+        await callback.answer(texts.ADMIN_CASINO_EDITOR_EXPIRED, show_alert=True)
+        return
+    await casino.delete_payout_rule(original)
+    page = draft["page"]
+    await state.clear()
+    text, kb = await render_casino_payouts(page)
+    await _edit(callback, text, kb)
 
 
 # ---- global tunables panel (global admins only) ----

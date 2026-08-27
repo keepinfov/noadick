@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Global administrators can manage exact casino combinations from a compact
+  inline panel, choosing either a stake multiplier or a fixed gross payout.
 - Global administrators can assign or clear an HTML-safe public developer label
   shown in a player's profile across every chat; each change is audited atomically.
 - Group chats now have a Telegram `🎰` casino with saved 1–50 centimetre stakes,
@@ -20,6 +22,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Casino payout explanations now reflect the live global rule table instead of
+  hardcoded combinations; existing payouts are preserved by migration.
 - Casino wins and losses now produce one compact line without spin controls and
   link to a private payout explanation; combinations are also shown when a
   player saves their default stake.

@@ -154,7 +154,7 @@ async def _run_spin(
     try:
         result_text = (
             texts.casino_result(result, rules_url)
-            if result.multiplier > 0
+            if result.gross_payout > 0
             else texts.casino_loss(result.stake, rules_url)
         )
         await bot.send_message(
@@ -184,7 +184,11 @@ async def _run_spin(
     F.text.regexp(r"^/start(?:@\w+)?\s+casino_rules$"),
 )
 async def casino_rules_deep_link(message: Message) -> None:
-    await message.answer(texts.CASINO_PAYOUT_RULES, parse_mode="HTML")
+    rules = await casino.list_payout_rules()
+    rendered_rules = [
+        (casino.decode_slot(rule.slot_value), rule.payout_kind, rule.payout_value) for rule in rules
+    ]
+    await message.answer(texts.casino_payout_rules(rendered_rules), parse_mode="HTML")
 
 
 @router.message(Command("casino"))
@@ -207,11 +211,12 @@ async def cmd_casino(message: Message, command: CommandObject, bot: Bot) -> None
             return
         try:
             saved = await casino.save_stake(message.chat.id, user.id, stake)
+            rule_count = await casino.count_payout_rules()
         except casino.CasinoError as error:
             await message.answer(_error_text(error))
             return
         await message.answer(
-            texts.casino_stake_saved(saved),
+            texts.casino_stake_saved(saved, rule_count),
             parse_mode="HTML",
         )
         return

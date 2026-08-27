@@ -393,22 +393,47 @@ CASINO_RECOVERY = "🎰 Корпорация восстанавливает ка
 CASINO_SEND_FAILED = "🎰 Telegram не запустил слот. Деньги не списаны."
 CASINO_SPIN_CANCELED = "⚠️ Крутка отменена: результат не рассчитан, деньги не изменились."
 CASINO_BUTTON_INVALID = "Эта кнопка казино устарела или повреждена. Вызови /casino заново."
-CASINO_PAYOUT_RULES = (
-    "🎰 <b>Как считаются выигрыши</b>\n"
-    "• 7️⃣7️⃣7️⃣ — выплата ×18\n"
-    "• ровно две 7️⃣ — выплата ×3\n"
-    "• три одинаковых, кроме 7️⃣, — выплата ×5\n"
-    "• остальные комбинации — ×0\n\n"
-    "Множитель применяется к ставке; выплата уже включает её. "
-    "Чистый итог = выплата − ставка."
-)
+CASINO_SYMBOL_LABELS = {
+    "bar": "BAR",
+    "grapes": "🍇",
+    "lemon": "🍋",
+    "seven": "7️⃣",
+}
 
 
-def casino_stake_saved(stake: int) -> str:
+def casino_combination(symbols) -> str:
+    return " · ".join(CASINO_SYMBOL_LABELS.get(symbol, "?") for symbol in symbols)
+
+
+def casino_payout_label(payout_kind: str, payout_value: int) -> str:
+    return f"×{payout_value}" if payout_kind == "multiplier" else f"{payout_value} см"
+
+
+def casino_payout_rules(rules) -> str:
+    lines = ["🎰 <b>Как считаются выигрыши</b>"]
+    for symbols, payout_kind, payout_value in rules:
+        lines.append(
+            f"• {casino_combination(symbols)} — {casino_payout_label(payout_kind, payout_value)}"
+        )
+    if len(lines) == 1:
+        lines.append("• выигрышных комбинаций сейчас нет")
+    lines.extend(
+        [
+            "",
+            "Для множителя общая выплата равна ставке × коэффициент; "
+            "фиксированная выплата от ставки не зависит.",
+            "Чистый итог = выплата − ставка. Комбинации и выплаты могут меняться.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def casino_stake_saved(stake: int, rule_count: int) -> str:
     return (
         f"✅ Ставка казино сохранена: <b>{stake} см</b>.\n"
         "Теперь <code>/casino</code> крутит слот с этой ставкой.\n"
-        "Выплаты: 7️⃣7️⃣7️⃣ ×18 · две 7️⃣ ×3 · три одинаковых ×5."
+        f"Сейчас настроено выигрышных комбинаций: <b>{rule_count}</b>. "
+        "Актуальная таблица доступна по ссылке под результатом крутки."
     )
 
 
@@ -416,7 +441,7 @@ def _casino_rules_suffix(rules_url: str | None) -> str:
     if rules_url:
         safe_url = html.escape(rules_url, quote=True)
         return f' · <a href="{safe_url}">Как считаются выигрыши</a>'
-    return " · 777 ×18 · две 7 ×3 · три одинаковых ×5"
+    return " · выплаты настраиваются администраторами"
 
 
 def casino_loss(stake: int, rules_url: str | None = None) -> str:
@@ -679,8 +704,52 @@ BTN_OWN_REASON = "✏️ Своя причина"
 
 BTN_BCAST_HISTORY = "🗂 История рассылок"
 BTN_GLOBAL_SETTINGS = "⚙️ Глобальные настройки"
+BTN_CASINO_PAYOUTS = "🎰 Выплаты казино"
 
 ADMIN_GSET_TITLE = "⚙️ <b>Глобальные настройки</b>\nИзменения применяются сразу для всех чатов."
+
+
+def admin_casino_payouts(total: int, page: int, pages: int) -> str:
+    return (
+        "🎰 <b>Выплаты казино</b>\n"
+        f"Точных выигрышных комбинаций: <b>{total}</b> · страница {page + 1}/{pages}.\n"
+        "Правила действуют сразу во всех чатах."
+    )
+
+
+def admin_casino_rule_editor(
+    *,
+    is_new: bool,
+    symbols,
+    payout_kind: str,
+    payout_value: int,
+) -> str:
+    mode = "Новое правило" if is_new else "Редактирование правила"
+    payout = casino_payout_label(payout_kind, payout_value)
+    kind = "множитель ставки" if payout_kind == "multiplier" else "фиксированная выплата"
+    return (
+        f"🎰 <b>{mode}</b>\n"
+        f"Комбинация: <b>{casino_combination(symbols)}</b>\n"
+        f"Тип: <b>{kind}</b> · значение: <b>{payout}</b>\n\n"
+        "Нажми на барабан, чтобы заменить символ, затем сохрани правило."
+    )
+
+
+def admin_casino_symbol_picker(position: int) -> str:
+    return f"🎰 <b>Символ барабана {position + 1}</b>\nВыбери новое значение:"
+
+
+def admin_casino_delete_confirm(symbols) -> str:
+    return (
+        "🗑 <b>Удалить правило?</b>\n"
+        f"Комбинация {casino_combination(symbols)} после удаления станет проигрышной."
+    )
+
+
+ADMIN_CASINO_RULE_DUPLICATE = "Для этой комбинации уже существует правило."
+ADMIN_CASINO_RULE_MISSING = "Правило уже удалено или изменено. Открой список заново."
+ADMIN_CASINO_EDITOR_EXPIRED = "Редактор устарел. Открой правило заново."
+ADMIN_CASINO_RULES_FULL = "Все 64 комбинации уже заняты. Сначала удали одно правило."
 
 
 def gset_field_label(label: str, value: int) -> str:
