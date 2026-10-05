@@ -1199,10 +1199,13 @@ def admin_chat_label(
     return title or str(chat_id)
 
 
-def admin_global_stats(chats: int, users: int, players: int, total_size: int, active: int) -> str:
+def admin_global_stats(
+    chats: int, users: int, players: int, total_size: int, active: int, dm_users: int = 0
+) -> str:
     return (
         "📊 <b>Глобальная статистика</b>\n"
         f"Чатов: {chats} (активных: {active})\n"
+        f"ЛС с ботом открыли: {dm_users}\n"
         f"Пользователей: {users}\n"
         f"Игроков (записей): {players}\n"
         f"Суммарный размер: {total_size} см"

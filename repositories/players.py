@@ -324,7 +324,11 @@ async def user_chat_sizes(user_id: int) -> list[tuple[int, str, int]]:
             await session.execute(
                 select(Player.chat_id, Chat.title, Player.size)
                 .join(Chat, Chat.chat_id == Player.chat_id)
-                .where(Player.user_id == user_id, Chat.is_banned.is_(False))
+                .where(
+                    Player.user_id == user_id,
+                    Chat.is_banned.is_(False),
+                    Chat.type != "private",
+                )
                 .order_by(Player.size.desc())
             )
         ).all()

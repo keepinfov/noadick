@@ -7,6 +7,11 @@ from sqlalchemy import func, select
 from db.engine import get_session_factory
 from db.models import Chat, Player, User
 
+# A private chat is not a registered chat: it is only a delivery channel for one
+# user, tracked by ``User.dm_started_at``. Everything that lists or counts chats
+# excludes ``type = 'private'`` (and keeps legacy rows with an unset type).
+PRIVATE_CHAT = "private"
+
 
 async def upsert_chat(chat_id: int, title: str, ctype: str, chat_hash: str) -> Chat:
     factory = get_session_factory()
@@ -49,7 +54,15 @@ async def list_chats(offset: int = 0, limit: int = 10) -> list[Chat]:
     factory = get_session_factory()
     async with factory() as session:
         rows = (
-            (await session.execute(select(Chat).order_by(Chat.title).offset(offset).limit(limit)))
+            (
+                await session.execute(
+                    select(Chat)
+                    .where(Chat.type != PRIVATE_CHAT)
+                    .order_by(Chat.title)
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
             .scalars()
             .all()
         )
@@ -59,7 +72,7 @@ async def list_chats(offset: int = 0, limit: int = 10) -> list[Chat]:
 async def count_chats(name_filter: str | None = None) -> int:
     factory = get_session_factory()
     async with factory() as session:
-        stmt = select(func.count(Chat.chat_id))
+        stmt = select(func.count(Chat.chat_id)).where(Chat.type != PRIVATE_CHAT)
         if name_filter:
             stmt = stmt.where(Chat.title.ilike(f"%{name_filter}%"))
         return (await session.execute(stmt)).scalar_one()
@@ -68,7 +81,7 @@ async def count_chats(name_filter: str | None = None) -> int:
 async def all_chat_ids(include_banned: bool = False) -> list[int]:
     factory = get_session_factory()
     async with factory() as session:
-        stmt = select(Chat.chat_id)
+        stmt = select(Chat.chat_id).where(Chat.type != PRIVATE_CHAT)
         if not include_banned:
             stmt = stmt.where(Chat.is_banned.is_(False))
         return list((await session.execute(stmt)).scalars().all())
@@ -82,32 +95,77 @@ def _active_cutoff(active_days: int) -> int:
 
 
 async def chat_ids_by_mode(mode: str, active_days: int = ACTIVE_DAYS_DEFAULT) -> list[int]:
-    """Chat ids for a broadcast, filtered by target mode (excludes banned chats):
-    - "groups": group/supergroup chats;
-    - "dm": private chats;
-    - "active": chats with any player who played within `active_days`
-      (for a DM that player is the owner, since chat_id == user_id);
-    - "all" (default): every non-banned chat.
+    """Delivery targets for one broadcast.
+
+    Groups come from the registered chats; direct messages come from the users
+    who opened a DM, because a private chat is never a chat. Modes:
+    - "groups": non-banned group chats;
+    - "dm": users with an open DM;
+    - "active": active group chats plus active DM users;
+    - "all" (default): every non-banned group plus every DM user.
     """
     factory = get_session_factory()
-    async with factory() as session:
-        if mode == "active":
-            stmt = (
-                select(Chat.chat_id)
-                .join(Player, Player.chat_id == Chat.chat_id)
-                .where(
-                    Chat.is_banned.is_(False),
-                    Player.last_play >= _active_cutoff(active_days),
+    groups: list[int] = []
+    if mode != "dm":
+        async with factory() as session:
+            stmt = select(Chat.chat_id).where(Chat.is_banned.is_(False), Chat.type != PRIVATE_CHAT)
+            if mode == "active":
+                recent = (
+                    select(Player.chat_id)
+                    .where(Player.last_play >= _active_cutoff(active_days))
+                    .distinct()
                 )
+                stmt = stmt.where(Chat.chat_id.in_(recent))
+            groups = [int(cid) for cid in (await session.execute(stmt)).scalars().all()]
+
+    if mode not in {"dm", "all", "active"}:
+        return groups
+
+    users = await dm_user_ids(active_days if mode == "active" else None)
+    seen = set(groups)
+    return groups + [uid for uid in users if uid not in seen]
+
+
+async def mark_dm_started(user_id: int, now: int | None = None) -> bool:
+    """Record that the user has opened a private chat with the bot."""
+    timestamp = int(time.time()) if now is None else now
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return False
+        if not user.dm_started_at:
+            user.dm_started_at = timestamp
+            await session.commit()
+        return True
+
+
+async def dm_user_ids(active_days: int | None = None) -> list[int]:
+    """Users who opened a DM, optionally only those who played recently."""
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = select(User.user_id).where(User.dm_started_at > 0, User.is_banned.is_(False))
+        if active_days is not None:
+            recent = (
+                select(Player.user_id)
+                .where(Player.last_play >= _active_cutoff(active_days))
                 .distinct()
             )
-        else:
-            stmt = select(Chat.chat_id).where(Chat.is_banned.is_(False))
-            if mode == "groups":
-                stmt = stmt.where(Chat.type.in_(("group", "supergroup")))
-            elif mode == "dm":
-                stmt = stmt.where(Chat.type == "private")
-        return list((await session.execute(stmt)).scalars().all())
+            stmt = stmt.where(User.user_id.in_(recent))
+        return [int(uid) for uid in (await session.execute(stmt)).scalars().all()]
+
+
+async def count_dm_users() -> int:
+    """How many users have an open DM (used by global statistics)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        return int(
+            (
+                await session.execute(
+                    select(func.count(User.user_id)).where(User.dm_started_at > 0)
+                )
+            ).scalar_one()
+        )
 
 
 async def list_chats_with_owner(
@@ -116,8 +174,10 @@ async def list_chats_with_owner(
     sort: str = "n",
     name_filter: str | None = None,
 ) -> list[tuple[Chat, User | None]]:
-    """Like list_chats, but also returns the owner User for private chats
-    (DM chat_id == owner user_id) so DMs can be labeled by name/username.
+    """Registered game chats with their (always empty) owner slot.
+
+    The owner used to label private chats; a DM is no longer a chat, so the
+    second element is kept for call-site compatibility and is always ``None``.
 
     ``sort`` is a whitelisted code (never interpolated): n=title, a=last
     activity, c=newest, s=player count. ``name_filter`` matches the title."""
@@ -128,11 +188,7 @@ async def list_chats_with_owner(
             .group_by(Player.chat_id)
             .subquery()
         )
-        stmt = (
-            select(Chat, User)
-            .outerjoin(User, User.user_id == Chat.chat_id)
-            .outerjoin(pc, pc.c.cid == Chat.chat_id)
-        )
+        stmt = select(Chat).outerjoin(pc, pc.c.cid == Chat.chat_id).where(Chat.type != PRIVATE_CHAT)
         if name_filter:
             stmt = stmt.where(Chat.title.ilike(f"%{name_filter}%"))
         if sort == "a":
@@ -143,8 +199,8 @@ async def list_chats_with_owner(
             stmt = stmt.order_by(func.coalesce(pc.c.pc, 0).desc())
         else:
             stmt = stmt.order_by(Chat.title)
-        rows = (await session.execute(stmt.offset(offset).limit(limit))).all()
-        return [(chat, user) for chat, user in rows]
+        rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
+        return [(chat, None) for chat in rows]
 
 
 async def active_chat_count(active_days: int = ACTIVE_DAYS_DEFAULT) -> int:
@@ -157,6 +213,7 @@ async def active_chat_count(active_days: int = ACTIVE_DAYS_DEFAULT) -> int:
                 .join(Player, Player.chat_id == Chat.chat_id)
                 .where(
                     Chat.is_banned.is_(False),
+                    Chat.type != PRIVATE_CHAT,
                     Player.last_play >= _active_cutoff(active_days),
                 )
             )
@@ -212,8 +269,13 @@ async def set_user_banned(
 async def global_stats() -> dict:
     factory = get_session_factory()
     async with factory() as session:
-        chats = (await session.execute(select(func.count(Chat.chat_id)))).scalar_one()
+        chats = (
+            await session.execute(select(func.count(Chat.chat_id)).where(Chat.type != PRIVATE_CHAT))
+        ).scalar_one()
         users = (await session.execute(select(func.count(User.user_id)))).scalar_one()
+        dm_users = (
+            await session.execute(select(func.count(User.user_id)).where(User.dm_started_at > 0))
+        ).scalar_one()
         players, total = (
             await session.execute(
                 select(
@@ -225,6 +287,7 @@ async def global_stats() -> dict:
         return {
             "chats": chats,
             "users": users,
+            "dm_users": dm_users,
             "players": players,
             "total_size": total,
         }

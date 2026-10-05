@@ -75,6 +75,7 @@ class RegistryMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         chat, user = _extract(event)
+        db_user = None
 
         if user is not None:
             db_user = await chats_repo.upsert_user(user.id, user.first_name or "", user.username)
@@ -91,7 +92,13 @@ class RegistryMiddleware(BaseMiddleware):
                         await self._notify_banned(event, db_user)
                     return None
 
-        if chat is not None:
+        if chat is not None and chat.type == "private":
+            # A DM is a delivery channel for one user, not a game chat. Remember
+            # that the user opened it instead of registering a chat row, so the
+            # group DM gate and DM broadcasts have a marker to read.
+            if db_user is not None and not db_user.dm_started_at:
+                await chats_repo.mark_dm_started(user.id)
+        elif chat is not None:
             db_chat = await chats_repo.upsert_chat(
                 chat.id, chat.title or "", chat.type or "", chat_hash(chat.id)
             )
@@ -118,7 +125,7 @@ class RegistryMiddleware(BaseMiddleware):
             and user is not None
             and not is_global_admin(user.id)
         ):
-            if await chats_repo.get_chat(user.id) is None:
+            if db_user is None or not db_user.dm_started_at:
                 # Reply at most once per 5 min per user so repeated commands
                 # before opening the DM don't turn into a reply flood.
                 if cooldown.check_and_touch(

@@ -235,17 +235,7 @@ async def render_chat(
         chat_id, offset, per_page, sort=sort, name_filter=name_filter
     )
 
-    if chat and chat.type == "private":
-        owner = await chats_repo.get_user(chat_id)
-        title = texts.admin_chat_label(
-            chat.type,
-            chat.title,
-            owner.first_name if owner else None,
-            owner.username if owner else None,
-            chat_id,
-        )
-    else:
-        title = chat.title if chat and chat.title else str(chat_id)
+    title = chat.title if chat and chat.title else str(chat_id)
     banned = chat and chat.is_banned
     lines = [
         texts.crumb("Чаты", title),
@@ -1016,7 +1006,9 @@ async def cb_disease_set(callback: CallbackQuery) -> None:
 async def cb_stats(callback: CallbackQuery) -> None:
     s = await chats_repo.global_stats()
     active = await chats_repo.active_chat_count(active_days=(await get_config()).active_days)
-    text = texts.admin_global_stats(s["chats"], s["users"], s["players"], s["total_size"], active)
+    text = texts.admin_global_stats(
+        s["chats"], s["users"], s["players"], s["total_size"], active, s["dm_users"]
+    )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
     )

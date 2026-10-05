@@ -51,6 +51,10 @@ class User(Base):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     public_label: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Set the first time the user writes to the bot privately. Replaces the
+    # private-chat row as the "DM is open" marker, so a DM is never registered
+    # as a game chat.
+    dm_started_at: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     banned_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ban_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=_now)
