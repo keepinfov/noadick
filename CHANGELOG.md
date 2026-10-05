@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The broadcast panel works like a letter: build a recipient list from presets
+  (all groups, users who opened a DM, active players, or both) or add an exact
+  `@username`, user id or chat id, remove entries, see per-recipient and total
+  delivery counts, preview the message exactly as recipients will see it, and
+  send it in one pass.
+- Global statistics report how many users opened a DM with the bot.
 - Global administrators can open a per-chat Corporation screen showing status,
   operating cash, insurance reserve, deposit liabilities, deficit, and the number
   of survived bail-ins, then move cash with ledgered, audited top-ups or
@@ -29,6 +35,14 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- A private chat is no longer a registered game chat: the bot records
+  `users.dm_started_at` instead of a `chats` row for DMs, so private chats no
+  longer appear in chat lists, chat counts, the global profile or broadcast
+  targeting. Migration `0013` adds the column and backfills it from the existing
+  private chats.
+- `/dick`, `/duel` and `/top` refuse to run in a private chat and point to the
+  groups; `/help` in a DM describes the personal cabinet (profile, statistics,
+  settings) instead of the group command list.
 - The recovery deficit is now computed from `corp_recovery_liability_pct` instead
   of always demanding full coverage of the deposit claims, in every path
   (collector, withdrawal, and casino settlement). Lowering it lets a chat leave
