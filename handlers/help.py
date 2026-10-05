@@ -31,6 +31,12 @@ async def cmd_help(message: Message) -> None:
         message, user.id, "help", get_config_sync().cd_help
     ):
         return
+    if message.chat.type == "private":
+        text = texts.DM_HELP
+        if user and is_global_admin(user.id):
+            text += texts.HELP_ADMIN
+        await message.answer(text)
+        return
     text = texts.HELP
     if user and is_global_admin(user.id):
         text += texts.HELP_ADMIN

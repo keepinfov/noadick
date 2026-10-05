@@ -40,6 +40,9 @@ async def _details_keyboard(bot: Bot, chat_id: int) -> InlineKeyboardMarkup | No
 
 @router.message(Command("top"))
 async def cmd_top(message: Message, bot: Bot) -> None:
+    if message.chat.type not in {"group", "supergroup"}:
+        await message.answer(texts.GAME_GROUP_ONLY)
+        return
     chat_id = message.chat.id
 
     user = message.from_user

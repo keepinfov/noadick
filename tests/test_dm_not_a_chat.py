@@ -214,3 +214,62 @@ async def test_user_chat_sizes_ignore_private_rows(db, monkeypatch) -> None:
         await session.commit()
 
     assert await players_repo.user_chat_sizes(user_id) == [(group, "", 5)]
+
+
+# --- private-chat command surface -------------------------------------------
+
+
+def _plain_message(chat_type: str, chat_id: int, user_id: int, text: str = "/dick"):
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id, type=chat_type),
+        from_user=SimpleNamespace(id=user_id, first_name="Вася"),
+        text=text,
+        answer=AsyncMock(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("module_name", "handler_name"),
+    [("dick", "cmd_dick"), ("duel", "cmd_duel"), ("top", "cmd_top")],
+)
+async def test_game_commands_refuse_in_a_private_chat(
+    module_name: str, handler_name: str, db, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADMIN_IDS", "")
+    import importlib
+
+    from sqlalchemy import func, select
+
+    from db.engine import get_session_factory
+    from db.models import Player
+
+    handler = getattr(importlib.import_module(f"handlers.{module_name}"), handler_name)
+    _chat, user_id = _ids()
+    message = _plain_message("private", user_id, user_id)
+
+    if handler_name == "cmd_duel":
+        await handler(message, SimpleNamespace(args=None), AsyncMock())
+    elif handler_name == "cmd_top":
+        await handler(message, AsyncMock())
+    else:
+        await handler(message)
+
+    message.answer.assert_awaited_once_with(texts.GAME_GROUP_ONLY)
+    factory = get_session_factory()
+    async with factory() as session:
+        players = await session.execute(select(func.count(Player.user_id)))
+    assert players.scalar_one() == 0
+
+
+async def test_help_shows_the_dm_surface_in_private_and_the_game_list_in_groups(
+    db, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADMIN_IDS", "")
+    from handlers import help as help_handler
+
+    _chat, user_id = _ids()
+    private = _plain_message("private", user_id, user_id, "/help")
+
+    await help_handler.cmd_help(private)
+
+    private.answer.assert_awaited_once_with(texts.DM_HELP)

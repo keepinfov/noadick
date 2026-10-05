@@ -50,6 +50,9 @@ async def cmd_dick(message: Message) -> None:
     user = message.from_user
     if not user:
         return
+    if message.chat.type not in {"group", "supergroup"}:
+        await message.answer(texts.GAME_GROUP_ONLY)
+        return
 
     user_id = user.id
     chat_id = message.chat.id

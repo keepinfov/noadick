@@ -100,6 +100,9 @@ async def cmd_duel(message: Message, command: CommandObject, bot: Bot) -> None:
     user = message.from_user
     if not user:
         return
+    if message.chat.type not in {"group", "supergroup"}:
+        await message.answer(texts.GAME_GROUP_ONLY)
+        return
 
     chat_id = message.chat.id
 
