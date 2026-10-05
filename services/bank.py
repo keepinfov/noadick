@@ -346,6 +346,18 @@ def required_reserve(liability: int, cfg: GlobalConfig) -> int:
     return max(0, liability) * cfg.corp_liquidity_reserve_pct // 100
 
 
+def recovery_deficit(balance: int, reserve: int, liability: int, cfg: GlobalConfig) -> int:
+    """Cash shortfall that keeps a chat's Corporation in recovery.
+
+    ``corp_recovery_liability_pct`` controls how much of the outstanding deposit
+    claims the till must cover before recovery is lifted (100% keeps the strict
+    original rule). The Corporation is also in deficit whenever its balance is
+    negative, regardless of the configured share.
+    """
+    required = max(0, liability) * cfg.corp_recovery_liability_pct // 100
+    return max(0, -int(balance), required - (int(balance) + int(reserve)))
+
+
 async def get_summary(chat_id: int, user_id: int) -> BankSummary:
     cfg = get_config_sync()
     player = await players_repo.get_player(chat_id, user_id)
@@ -680,11 +692,7 @@ async def apply_bail_in_in(
             dep.accrued = 0
             dep.interest_remainder_ppm = 0
 
-    deficit = max(
-        0,
-        -int(corp.balance),
-        protected_claims - (int(corp.balance) + int(corp.insurance_reserve)),
-    )
+    deficit = recovery_deficit(corp.balance, corp.insurance_reserve, protected_claims, cfg)
     status = "recovery" if deficit > 0 else "healthy"
     corp.status = status
     corp.sanation_started_at = 0
@@ -855,10 +863,8 @@ async def withdraw_deposit(chat_id: int, user_id: int, amount: int | None) -> Op
             await session.flush()
             remaining_liability = await repo.deposit_liability_in(session, chat_id)
             final_balance = int(corp.balance) - credited
-            deficit = max(
-                0,
-                -final_balance,
-                remaining_liability - (final_balance + int(corp.insurance_reserve)),
+            deficit = recovery_deficit(
+                final_balance, corp.insurance_reserve, remaining_liability, cfg
             )
             if bail_in is not None or corp.status == "recovery":
                 corp.status = "recovery" if deficit > 0 else "healthy"
@@ -1602,11 +1608,7 @@ async def _run_corporation_crises(bot, now: int) -> None:
                     await record_bail_in_in(session, snapshot.chat_id, legacy_info, force=True)
                 elif corp.status == "recovery":
                     liability = await repo.deposit_liability_in(session, snapshot.chat_id)
-                    deficit = max(
-                        0,
-                        -int(corp.balance),
-                        liability - (int(corp.balance) + int(corp.insurance_reserve)),
-                    )
+                    deficit = recovery_deficit(corp.balance, corp.insurance_reserve, liability, cfg)
                     if deficit <= 0:
                         corp.status = "healthy"
                         corp.sanation_started_at = 0

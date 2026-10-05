@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Global administrators can open a per-chat Corporation screen showing status,
+  operating cash, insurance reserve, deposit liabilities, deficit, and the number
+  of survived bail-ins, then move cash with ledgered, audited top-ups or
+  write-offs and recompute the status.
+- The new global setting `corp_recovery_liability_pct` controls what share of
+  deposit claims a Corporation must cover before it leaves recovery; 100 keeps the
+  previous strict rule.
 - Global administrators can manage exact casino combinations from a compact
   inline panel, choosing either a stake multiplier or a fixed gross payout.
 - Global administrators can assign or clear an HTML-safe public developer label
@@ -22,6 +29,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The recovery deficit is now computed from `corp_recovery_liability_pct` instead
+  of always demanding full coverage of the deposit claims, in every path
+  (collector, withdrawal, and casino settlement). Lowering it lets a chat leave
+  recovery without destroying protected principal.
 - Casino payout explanations now reflect the live global rule table instead of
   hardcoded combinations; existing payouts are preserved by migration.
 - Casino wins and losses now produce one compact line without spin controls and

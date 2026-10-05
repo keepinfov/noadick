@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 import texts
 from db.engine import get_session_factory
-from db.models import AuditLog, User
+from db.models import AuditLog, Chat, ChatCorporation, User
 from models.disease import DISEASE_BY_ID
+from repositories import bank as bank_repo
 from repositories import broadcasts as broadcasts_repo
 from repositories import chats as chats_repo
 from repositories import events as E
@@ -20,6 +21,8 @@ from repositories import players as players_repo
 from repositories.players import get_chat_lock, now_ts
 from services import economy_reform
 from services.admins import is_global_admin
+from services.bank import recovery_deficit
+from services.global_settings import get_config_sync
 
 
 @dataclass
@@ -300,3 +303,120 @@ async def log_broadcast(
         "broadcast",
         payload={"mode": target_mode, "sent": sent, "failed": failed},
     )
+
+
+# ---- chat Corporation control ----
+
+
+# Guards the panel against fat-fingered deltas while still allowing a deep
+# negative till, which recovery and bail-ins legitimately produce.
+CORP_BALANCE_LIMIT = 100_000
+
+
+@dataclass(frozen=True)
+class CorpSnapshot:
+    chat_id: int
+    status: str
+    balance: int
+    reserve: int
+    liability: int
+    deficit: int
+    bankruptcies: int
+
+    @property
+    def healthy(self) -> bool:
+        return self.status == "healthy"
+
+
+async def corp_snapshot(chat_id: int) -> CorpSnapshot | None:
+    """Read-only Corporation view; ``None`` when the chat is unknown."""
+    cfg = get_config_sync()
+    factory = get_session_factory()
+    async with factory() as session:
+        if await session.get(Chat, chat_id) is None:
+            return None
+        corp = await session.get(ChatCorporation, chat_id)
+        liability = await bank_repo.deposit_liability_in(session, chat_id)
+        balance = int(corp.balance) if corp is not None else 0
+        reserve = int(corp.insurance_reserve) if corp is not None else 0
+        return CorpSnapshot(
+            chat_id=chat_id,
+            status=corp.status if corp is not None else "healthy",
+            balance=balance,
+            reserve=reserve,
+            liability=liability,
+            deficit=recovery_deficit(balance, reserve, liability, cfg),
+            bankruptcies=int(corp.bankruptcy_count) if corp is not None else 0,
+        )
+
+
+async def adjust_corp_balance(actor_id: int, chat_id: int, delta: int) -> ActionResult:
+    """Move a chat Corporation's operating cash and re-derive its status.
+
+    The move is booked through ``corp_apply_in``, so it lands in the append-only
+    ``corporation_ledger`` as ``admin_adjust`` as well as in ``audit_log``. The
+    status follows the same deficit rule the collector uses, which is what makes
+    a top-up able to lift a stuck recovery immediately.
+    """
+    delta = int(delta)
+    cfg = get_config_sync()
+    async with get_chat_lock(chat_id), bank_repo.corp_lock(chat_id):
+        factory = get_session_factory()
+        async with factory() as session, session.begin():
+            corp = await bank_repo.ensure_corp_in(session, chat_id)
+            current = int(corp.balance)
+            target = max(-CORP_BALANCE_LIMIT, min(CORP_BALANCE_LIMIT, current + delta))
+            applied = target - current
+            if applied == 0:
+                return ActionResult(False, texts.RES_CORP_NO_CHANGE)
+            balance = await bank_repo.corp_apply_in(
+                session,
+                chat_id,
+                delta=applied,
+                reason="admin_adjust",
+                user_id=actor_id,
+                meta={"actor_id": actor_id},
+            )
+            liability = await bank_repo.deposit_liability_in(session, chat_id)
+            deficit = recovery_deficit(balance, corp.insurance_reserve, liability, cfg)
+            status = "recovery" if deficit > 0 else "healthy"
+            corp.status = status
+            corp.sanation_started_at = 0
+            corp.sanation_deadline = 0
+    await _audit(
+        actor_id,
+        "corp_adjust",
+        target_chat=chat_id,
+        payload={
+            "applied": applied,
+            "balance": balance,
+            "deficit": deficit,
+            "status": status,
+        },
+    )
+    return ActionResult(True, texts.res_corp_adjusted(applied, balance, status))
+
+
+async def recompute_corp_status(actor_id: int, chat_id: int) -> ActionResult | None:
+    """Re-derive one Corporation's status without moving any money."""
+    cfg = get_config_sync()
+    async with get_chat_lock(chat_id), bank_repo.corp_lock(chat_id):
+        factory = get_session_factory()
+        async with factory() as session, session.begin():
+            if await session.get(Chat, chat_id) is None:
+                return None
+            corp = await bank_repo.ensure_corp_in(session, chat_id)
+            liability = await bank_repo.deposit_liability_in(session, chat_id)
+            deficit = recovery_deficit(corp.balance, corp.insurance_reserve, liability, cfg)
+            previous = corp.status
+            status = "recovery" if deficit > 0 else "healthy"
+            corp.status = status
+            corp.sanation_started_at = 0
+            corp.sanation_deadline = 0
+    await _audit(
+        actor_id,
+        "corp_recompute_status",
+        target_chat=chat_id,
+        payload={"previous": previous, "status": status, "deficit": deficit},
+    )
+    return ActionResult(True, texts.res_corp_recomputed(previous, status, deficit))

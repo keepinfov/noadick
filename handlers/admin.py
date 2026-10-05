@@ -291,7 +291,8 @@ async def render_chat(
             InlineKeyboardButton(
                 text=texts.BTN_HEALTH_REFORM,
                 callback_data=f"adm:reform:{chat_id}",
-            )
+            ),
+            InlineKeyboardButton(text=texts.BTN_CORP, callback_data=f"adm:corp:{chat_id}"),
         ]
     )
     rows.append(
@@ -1029,6 +1030,72 @@ async def cb_economy(callback: CallbackQuery) -> None:
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")]]
     )
     await _edit(callback, texts.admin_economy(report), kb)
+
+
+# ---- per-chat Corporation control ----
+
+CORP_DELTAS = (10, 50)
+
+
+async def render_corp(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Corporation screen for one chat: balances, liabilities and the cash knobs."""
+    cfg = await get_config()
+    snapshot = await admin_actions.corp_snapshot(chat_id)
+    if snapshot is None:
+        return texts.RES_CORP_NOT_FOUND, InlineKeyboardMarkup(
+            inline_keyboard=[_back_row("adm:chats:0")]
+        )
+    rows = [
+        [
+            InlineKeyboardButton(text=f"➕{value}", callback_data=f"adm:corpadj:{chat_id}:{value}")
+            for value in CORP_DELTAS
+        ],
+        [
+            InlineKeyboardButton(text=f"➖{value}", callback_data=f"adm:corpadj:{chat_id}:{-value}")
+            for value in CORP_DELTAS
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔄 Пересчитать статус", callback_data=f"adm:corpsync:{chat_id}"
+            )
+        ],
+        _back_row(f"adm:chat:{chat_id}:s:0"),
+    ]
+    return (
+        texts.admin_corp(snapshot, cfg.corp_recovery_liability_pct),
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:corp:"))
+async def cb_corp(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    chat_id = int(callback.data.split(":")[2])
+    text, kb = await render_corp(chat_id)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:corpadj:"))
+async def cb_corp_adjust(callback: CallbackQuery) -> None:
+    _, _, raw_chat, raw_delta = callback.data.split(":")
+    chat_id = int(raw_chat)
+    result = await admin_actions.adjust_corp_balance(callback.from_user.id, chat_id, int(raw_delta))
+    text, kb = await render_corp(chat_id)
+    await _edit(callback, text, kb)
+    if not result.ok:
+        await callback.answer(result.message, show_alert=True)
+
+
+@router.callback_query(F.data.startswith("adm:corpsync:"))
+async def cb_corp_sync(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":")[2])
+    result = await admin_actions.recompute_corp_status(callback.from_user.id, chat_id)
+    text, kb = await render_corp(chat_id)
+    await _edit(callback, text, kb)
+    await callback.answer(
+        texts.RES_CORP_NOT_FOUND if result is None else result.message,
+        show_alert=True,
+    )
 
 
 # ---- configurable global casino payout rules ----

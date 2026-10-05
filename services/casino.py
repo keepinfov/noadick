@@ -21,6 +21,7 @@ from services.bank import (
     BailInInfo,
     apply_bail_in_in,
     record_bail_in_in,
+    recovery_deficit,
     required_reserve,
 )
 from services.global_settings import get_config_sync
@@ -300,11 +301,7 @@ async def _settle(
     await session.flush()
     remaining_liability = await bank_repo.deposit_liability_in(session, chat_id)
     final_balance = int(corp.balance) - net
-    deficit = max(
-        0,
-        -final_balance,
-        remaining_liability - (final_balance + int(corp.insurance_reserve)),
-    )
+    deficit = recovery_deficit(final_balance, corp.insurance_reserve, remaining_liability, cfg)
     if bail_in is not None:
         corp.status = "recovery" if deficit > 0 else "healthy"
         corp.sanation_started_at = 0

@@ -479,6 +479,10 @@ class GlobalSettings(Base):
     dick_emission_cap: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
     corp_liquidity_reserve_pct: Mapped[int] = mapped_column(Integer, default=25)
     corp_sanation_days: Mapped[int] = mapped_column(Integer, default=7)
+    # Share of deposit claims the till must cover before a chat leaves recovery.
+    corp_recovery_liability_pct: Mapped[int] = mapped_column(
+        Integer, default=100, server_default="100"
+    )
     sekasko_max_coverage: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
     sekasko_premium_pct: Mapped[int] = mapped_column(Integer, default=5)
     dep_risk_free_principal: Mapped[int] = mapped_column(Integer, default=50, server_default="50")

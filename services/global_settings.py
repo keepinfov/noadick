@@ -61,6 +61,7 @@ EDITABLE_BANK: list[tuple[str, str, int, int, int, int]] = [
 EDITABLE_CORP: list[tuple[str, str, int, int, int, int]] = [
     ("dick_emission_cap", "/dick: эмиссия плюса (см)", 1, 2, 0, 1000),
     ("corp_liquidity_reserve_pct", "Корпорация: резерв вкладов (%)", 5, 25, 0, 100),
+    ("corp_recovery_liability_pct", "Корпорация: порог recovery (%)", 5, 25, 0, 100),
     ("sekasko_max_coverage", "СЕКАСКО: лимит (см)", 5, 20, 0, 100),
     ("sekasko_premium_pct", "СЕКАСКО: премия (%)", 1, 5, 0, 100),
     ("dep_risk_free_principal", "Вклад: несгораемое тело (см)", 5, 50, 0, 100000),
@@ -120,6 +121,7 @@ DEFAULTS: dict[str, int] = {
     "reminder_cooldown_sec": 21600,
     "dick_emission_cap": 2,
     "corp_liquidity_reserve_pct": 25,
+    "corp_recovery_liability_pct": 100,
     "sekasko_max_coverage": 100,
     "sekasko_premium_pct": 5,
     "dep_risk_free_principal": 50,
@@ -169,6 +171,7 @@ class GlobalConfig:
     reminder_cooldown_sec: int
     dick_emission_cap: int
     corp_liquidity_reserve_pct: int
+    corp_recovery_liability_pct: int
     sekasko_max_coverage: int
     sekasko_premium_pct: int
     dep_risk_free_principal: int

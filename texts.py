@@ -760,6 +760,7 @@ def gset_field_label(label: str, value: int) -> str:
 
 BTN_LOCAL_BANS = "🚫 Локальные баны"
 BTN_HEALTH_REFORM = "🥦 ЗОЖ-реформа"
+BTN_CORP = "🏦 Корпорация"
 ADMIN_NO_LOCAL_BANS = "В этом чате нет локально забаненных игроков."
 
 
@@ -1231,6 +1232,55 @@ def admin_economy(report) -> str:
         f"({report.active_30d} игроков)\n"
         f"ПИСЯГО прикрыло: {report.pisyago_covered_7d} см за 7 дней · "
         f"{report.pisyago_covered_30d} см за 30 дней"
+    )
+
+
+# ---- per-chat Corporation control (global panel) ----
+
+ADMIN_CORP_TITLE = "🏦 <b>Корпорация чата</b>"
+RES_CORP_NO_CHANGE = "Касса уже на пределе — изменений нет."
+RES_CORP_NOT_FOUND = "Чат не найден в базе."
+
+_CORP_STATUS_LABELS = {
+    "healthy": "здорова",
+    "recovery": "recovery — восстановление кассы",
+    "sanation": "санация",
+}
+
+
+def corp_status_label(status: str) -> str:
+    return _CORP_STATUS_LABELS.get(status, status)
+
+
+def admin_corp(snapshot, threshold_pct: int) -> str:
+    lines = [
+        ADMIN_CORP_TITLE,
+        "",
+        f"Чат: <code>{snapshot.chat_id}</code>",
+        f"Статус: {corp_status_label(snapshot.status)}",
+        f"Касса: {snapshot.balance} см",
+        f"Резерв СЕКАСКО: {snapshot.reserve} см",
+        f"Обязательства по вкладам: {snapshot.liability} см",
+        f"Дефицит: {snapshot.deficit} см",
+        f"Распилов пережито: {snapshot.bankruptcies}",
+        "",
+        f"Правило recovery: касса обязана покрывать {threshold_pct}% вкладов. "
+        "Пока дефицит больше нуля, казино, вклады и кредиты в чате заморожены.",
+    ]
+    return "\n".join(lines)
+
+
+def res_corp_adjusted(applied: int, balance: int, status: str) -> str:
+    sign = "+" if applied > 0 else ""
+    return (
+        f"Касса Корпорации: {sign}{applied} см → {balance} см. Статус: {corp_status_label(status)}."
+    )
+
+
+def res_corp_recomputed(previous: str, status: str, deficit: int) -> str:
+    return (
+        f"Статус пересчитан: {corp_status_label(previous)} → {corp_status_label(status)}, "
+        f"дефицит {deficit} см."
     )
 
 
