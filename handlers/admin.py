@@ -38,8 +38,6 @@ from services.global_settings import get_config
 router = Router()
 logger = logging.getLogger(__name__)
 
-BCAST_MODES = ("all", "groups", "dm", "active")
-
 
 class IsGlobalAdmin(BaseFilter):
     async def __call__(self, event: Message | CallbackQuery) -> bool:
@@ -57,7 +55,8 @@ class AdminStates(StatesGroup):
     set_public_label = State()
     find_query = State()
     broadcast_text = State()
-    broadcast_confirm = State()
+    broadcast_user = State()
+    broadcast_chat = State()
     ban_reason = State()
     ban_duration = State()
     filter_chats = State()
@@ -1827,22 +1826,164 @@ async def cb_find_page(callback: CallbackQuery, state: FSMContext) -> None:
     await _edit(callback, text, kb)
 
 
+MAX_BROADCAST_CHARS = 4096
+
+
+def _bcast_lines(recipients: list[dict], counts: list[int]) -> list[str]:
+    return [
+        texts.bcast_recipient_label(item, count)
+        for item, count in zip(recipients, counts, strict=True)
+    ]
+
+
+async def _bcast_draft(state: FSMContext) -> tuple[list[dict], str | None]:
+    data = await state.get_data()
+    return list(data.get("bcast_recipients") or []), data.get("bcast_text")
+
+
+async def _bcast_counts(recipients: list[dict]) -> list[int]:
+    active_days = (await get_config()).active_days
+    return [await admin_actions.count_recipient(item, active_days) for item in recipients]
+
+
+async def _bcast_total(recipients: list[dict]) -> int:
+    active_days = (await get_config()).active_days
+    return len(await admin_actions.resolve_broadcast_targets(recipients, active_days))
+
+
+async def render_bcast_composer(state: FSMContext) -> tuple[str, InlineKeyboardMarkup]:
+    """The letter: recipient list plus the text being written."""
+    recipients, text = await _bcast_draft(state)
+    lines = _bcast_lines(recipients, await _bcast_counts(recipients))
+    total = await _bcast_total(recipients)
+    rows = [
+        [InlineKeyboardButton(text=texts.BTN_BCAST_ADD, callback_data="adm:bcr")],
+        [
+            InlineKeyboardButton(text=texts.BTN_BCAST_TEXT, callback_data="adm:bctext"),
+            InlineKeyboardButton(text=texts.BTN_BCAST_PREVIEW, callback_data="adm:bcpre"),
+        ],
+        [InlineKeyboardButton(text=texts.BTN_BCAST_SEND, callback_data="adm:bcgo")],
+        [InlineKeyboardButton(text=texts.BTN_HOME, callback_data="adm:home")],
+    ]
+    return (
+        texts.admin_bcast_composer(lines, text, total),
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def render_bcast_recipients(state: FSMContext) -> tuple[str, InlineKeyboardMarkup]:
+    """Recipient builder: presets, an exact person or an exact chat, and removals."""
+    recipients, _text = await _bcast_draft(state)
+    counts = await _bcast_counts(recipients)
+    lines = _bcast_lines(recipients, counts)
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"adm:bcadd:{kind}")]
+        for kind, label in texts.BCAST_PRESET_LABELS.items()
+    ]
+    rows.append([InlineKeyboardButton(text=texts.BTN_BCAST_USER, callback_data="adm:bcadd:user")])
+    rows.append([InlineKeyboardButton(text=texts.BTN_BCAST_CHAT, callback_data="adm:bcadd:chat")])
+    rows.extend(
+        [
+            InlineKeyboardButton(text=f"❌ {line}", callback_data=f"adm:bcdel:{index}"),
+        ]
+        for index, line in enumerate(lines)
+    )
+    if recipients:
+        rows.append([InlineKeyboardButton(text=texts.BTN_BCAST_CLEAR, callback_data="adm:bcclr")])
+    rows.append([InlineKeyboardButton(text=texts.BTN_BCAST_BACK, callback_data="adm:bcast")])
+    return (
+        texts.admin_bcast_recipients_screen(lines, await _bcast_total(recipients)),
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def _add_recipient(state: FSMContext, item: dict) -> None:
+    recipients, _text = await _bcast_draft(state)
+    recipients.append(item)
+    await state.update_data(bcast_recipients=recipients)
+    await state.set_state(None)
+
+
 @router.callback_query(F.data == "adm:bcast")
 async def cb_bcast(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(None)
+    text, kb = await render_bcast_composer(state)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:bcr")
+async def cb_bcast_recipients(callback: CallbackQuery, state: FSMContext) -> None:
+    text, kb = await render_bcast_recipients(state)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:bcadd:"))
+async def cb_bcast_add(callback: CallbackQuery, state: FSMContext) -> None:
+    kind = callback.data.split(":")[2]
+    if kind == "user":
+        await state.set_state(AdminStates.broadcast_user)
+        await _edit(callback, texts.ADMIN_ENTER_BCAST_USER, _CANCEL_KB)
+        return
+    if kind == "chat":
+        await state.set_state(AdminStates.broadcast_chat)
+        await _edit(callback, texts.ADMIN_ENTER_BCAST_CHAT, _CANCEL_KB)
+        return
+    if kind not in admin_actions.PRESET_RECIPIENTS:
+        await callback.answer()
+        return
+    await _add_recipient(state, {"kind": kind})
+    text, kb = await render_bcast_recipients(state)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:bcdel:"))
+async def cb_bcast_del(callback: CallbackQuery, state: FSMContext) -> None:
+    index = int(callback.data.split(":")[2])
+    recipients, _text = await _bcast_draft(state)
+    if 0 <= index < len(recipients):
+        recipients.pop(index)
+        await state.update_data(bcast_recipients=recipients)
+    text, kb = await render_bcast_recipients(state)
+    await _edit(callback, text, kb)
+
+
+@router.callback_query(F.data == "adm:bcclr")
+async def cb_bcast_clear(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(bcast_recipients=[])
+    text, kb = await render_bcast_recipients(state)
+    await _edit(callback, text, kb)
+
+
+@router.message(AdminStates.broadcast_user)
+async def msg_bcast_user(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    target = await admin_actions.find_user_target(raw)
+    if target is None:
+        await message.answer(texts.admin_bcast_lookup_failed(raw))
+        return
+    user_id, name = target
+    await _add_recipient(state, {"kind": "user", "id": user_id, "label": name})
+    text, kb = await render_bcast_recipients(state)
+    await message.answer(text, reply_markup=kb)
+
+
+@router.message(AdminStates.broadcast_chat)
+async def msg_bcast_chat(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    target = await admin_actions.find_chat_target(raw)
+    if target is None:
+        await message.answer(texts.admin_bcast_lookup_failed(raw))
+        return
+    chat_id, title = target
+    await _add_recipient(state, {"kind": "chat", "id": chat_id, "label": title})
+    text, kb = await render_bcast_recipients(state)
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "adm:bctext")
+async def cb_bcast_text(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.broadcast_text)
     await _edit(callback, texts.ADMIN_ENTER_BCAST, _CANCEL_KB)
-
-
-def _bcast_mode_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=texts.BTN_MODE_ALL, callback_data="adm:bmode:all")],
-            [InlineKeyboardButton(text=texts.BTN_MODE_GROUPS, callback_data="adm:bmode:groups")],
-            [InlineKeyboardButton(text=texts.BTN_MODE_DM, callback_data="adm:bmode:dm")],
-            [InlineKeyboardButton(text=texts.BTN_MODE_ACTIVE, callback_data="adm:bmode:active")],
-            [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="adm:home")],
-        ]
-    )
 
 
 @router.message(AdminStates.broadcast_text)
@@ -1852,38 +1993,33 @@ async def msg_bcast(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(texts.ADMIN_BCAST_EMPTY, reply_markup=main_menu_kb())
         return
+    if len(text) > MAX_BROADCAST_CHARS:
+        await message.answer(texts.admin_bcast_too_long(MAX_BROADCAST_CHARS))
+        return
     await state.update_data(bcast_text=text)
-    await state.set_state(AdminStates.broadcast_confirm)
-    await message.answer(texts.ADMIN_PICK_BCAST_MODE, reply_markup=_bcast_mode_kb())
+    await state.set_state(None)
+    rendered, kb = await render_bcast_composer(state)
+    await message.answer(rendered, reply_markup=kb)
 
 
-@router.callback_query(F.data == "adm:bpick")
-async def cb_bcast_pick(callback: CallbackQuery, state: FSMContext) -> None:
-    text = (await state.get_data()).get("bcast_text")
+@router.callback_query(F.data == "adm:bcpre")
+async def cb_bcast_preview(callback: CallbackQuery, state: FSMContext) -> None:
+    recipients, text = await _bcast_draft(state)
     if not text:
-        await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
+        await callback.answer(texts.admin_bcast_no_text(), show_alert=True)
         return
-    await _edit(callback, texts.ADMIN_PICK_BCAST_MODE, _bcast_mode_kb())
-
-
-@router.callback_query(F.data.startswith("adm:bmode:"))
-async def cb_bcast_mode(callback: CallbackQuery, state: FSMContext) -> None:
-    mode = callback.data.split(":")[2]
-    if mode not in BCAST_MODES:
-        mode = "all"
-    data = await state.get_data()
-    text = data.get("bcast_text")
-    if not text:
-        await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
+    if not recipients:
+        await callback.answer(texts.admin_bcast_no_targets(), show_alert=True)
         return
-    await state.update_data(bcast_mode=mode)
-    targets = await admin_actions.broadcast_targets(
-        mode, active_days=(await get_config()).active_days
-    )
+    lines = _bcast_lines(recipients, await _bcast_counts(recipients))
+    rows = [
+        [InlineKeyboardButton(text=texts.BTN_BCAST_SEND, callback_data="adm:bcgo")],
+        [InlineKeyboardButton(text=texts.BTN_BCAST_BACK, callback_data="adm:bcast")],
+    ]
     await _edit(
         callback,
-        texts.admin_bcast_mode_preview(text, texts.bcast_mode_label(mode), len(targets)),
-        _confirm_kb("adm:yes:bcast", "adm:bpick"),
+        texts.admin_bcast_target_text(text, lines, await _bcast_total(recipients)),
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
@@ -1912,33 +2048,42 @@ async def _send_to_resolved_thread(
     return ok, reason, thread_id
 
 
-@router.callback_query(F.data == "adm:yes:bcast")
+@router.callback_query(F.data == "adm:bcgo")
 async def cb_do_bcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     await state.clear()
     text = data.get("bcast_text")
+    recipients = list(data.get("bcast_recipients") or [])
     if not text:
         await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
         return
-    mode = data.get("bcast_mode", "all")
     cfg = await get_config()
+    targets = await admin_actions.resolve_broadcast_targets(recipients, cfg.active_days)
+    if not targets:
+        await _edit(callback, texts.ADMIN_BCAST_LOST, main_menu_kb())
+        return
     if callback.message is not None:
         await callback.message.edit_text(texts.ADMIN_BCAST_STARTED)
     await callback.answer()
-    targets = await admin_actions.broadcast_targets(mode, active_days=cfg.active_days)
     # Pause between sends to stay under Telegram's ~30 msg/s flood cap.
     rate_delay = cfg.bcast_rate_delay
     sent = 0
     failed = 0
-    for chat_id in targets:
-        ok, reason, thread_id = await _send_to_resolved_thread(bot, chat_id, text)
+    for target in targets:
+        if target.is_dm:
+            ok = await _bcast_send(bot, target.chat_id, text, None)
+            reason: str | None = "dm"
+            thread_id = None
+        else:
+            ok, reason, thread_id = await _send_to_resolved_thread(bot, target.chat_id, text)
         sent += int(ok)
         failed += int(not ok)
         if ok and reason == "auto":
-            await _bcast_send(bot, chat_id, texts.ADMIN_BCAST_AUTO_TOPIC, thread_id)
+            await _bcast_send(bot, target.chat_id, texts.ADMIN_BCAST_AUTO_TOPIC, thread_id)
         await asyncio.sleep(rate_delay)
+    summary = "+".join(str(item.get("kind", "")) for item in recipients)[:32] or "custom"
     await admin_actions.log_broadcast(
-        callback.from_user.id, text[: texts.MAX_BCAST_PREVIEW_LEN], mode, sent, failed
+        callback.from_user.id, text[: texts.MAX_BCAST_PREVIEW_LEN], summary, sent, failed
     )
     if callback.message is not None:
         await callback.message.answer(

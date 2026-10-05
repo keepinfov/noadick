@@ -971,10 +971,17 @@ def poker_error(code: str) -> str:
 
 
 BTN_UNBAN_USER = "✅ Разбан юзера"
-BTN_MODE_ALL = "🌐 Все чаты"
-BTN_MODE_GROUPS = "👥 Только группы"
-BTN_MODE_DM = "✉️ Только личка"
-BTN_MODE_ACTIVE = "🔥 Только активные"
+
+# Broadcast composer.
+BTN_BCAST_ADD = "➕ Добавить получателей"
+BTN_BCAST_LIST = "👥 Получатели"
+BTN_BCAST_TEXT = "✏️ Текст"
+BTN_BCAST_PREVIEW = "👁 Превью"
+BTN_BCAST_SEND = "📨 Отправить"
+BTN_BCAST_CLEAR = "🗑 Очистить список"
+BTN_BCAST_USER = "👤 Человек: @username или ID"
+BTN_BCAST_CHAT = "🧩 Чат по ID"
+BTN_BCAST_BACK = "⬅️ К письму"
 
 BTN_RESET_CHAT = "🧨 Сброс чата"
 BTN_UNBAN = "✅ Разбан"
@@ -1025,23 +1032,34 @@ ADMIN_PUBLIC_LABEL_INVALID = "Нужна непустая строка без п
 ADMIN_ENTER_BAN_REASON = "Введи причину бана:"
 ADMIN_ENTER_BAN_CHAT_REASON = "Введи причину бана чата:"
 ADMIN_REASON_EMPTY = "Пустая причина. Отменено."
+ADMIN_ENTER_BCAST_USER = "👤 Пришли @username или числовой ID получателя:"
+ADMIN_ENTER_BCAST_CHAT = "🧩 Пришли числовой ID чата (например -1001234567890):"
 ADMIN_ENTER_FIND = "Введи ID игрока или часть имени:"
 ADMIN_FIND_EMPTY = "Пустой запрос. Отменено."
 ADMIN_FIND_NONE = "Ничего не найдено."
 ADMIN_FIND_LOST = "Запрос поиска потерян. Повтори поиск через меню."
-ADMIN_ENTER_BCAST = "Введи текст рассылки (HTML). Дальше выберешь, кому отправить:"
+ADMIN_ENTER_BCAST = (
+    "✏️ Пришли текст письма одним сообщением. Разметку Telegram (жирный, ссылки) можно."
+)
 ADMIN_BCAST_EMPTY = "Пустой текст. Отменено."
-ADMIN_BCAST_LOST = "Текст рассылки потерян. Отменено."
+ADMIN_BCAST_LOST = "Черновик рассылки потерян. Открой её заново из меню."
 ADMIN_BCAST_STARTED = "📢 Рассылка началась…"
-ADMIN_PICK_BCAST_MODE = "📢 Кому отправить рассылку?"
 ADMIN_BCAST_NO_HISTORY = "Рассылок ещё не было."
 
-# Broadcast target mode -> human label.
+# Broadcast recipient presets (kind -> button label).
+BCAST_PRESET_LABELS: dict[str, str] = {
+    "groups": "👥 Все группы",
+    "dm": "💬 Открывшие ЛС",
+    "active": "🔥 Активные",
+    "all": "🌐 Группы + ЛС",
+}
+# Stored target summary -> human label (older rows hold the legacy modes).
 BCAST_MODE_LABELS: dict[str, str] = {
-    "all": "все чаты",
+    "all": "группы + ЛС",
     "groups": "только группы",
-    "dm": "только личка",
+    "dm": "только ЛС",
     "active": "только активные",
+    "custom": "свой список",
 }
 
 # Broadcast knobs (centralized so handlers/repos share one source of truth).
@@ -1167,15 +1185,78 @@ def admin_find_result_line(name: str, size: int, chat_id: int) -> str:
 
 
 def bcast_mode_label(mode: str) -> str:
-    return BCAST_MODE_LABELS.get(mode, BCAST_MODE_LABELS["all"])
+    return BCAST_MODE_LABELS.get(mode, mode)
 
 
-def admin_bcast_mode_preview(text: str, mode_label: str, target_count: int) -> str:
-    return (
-        f"📢 Предпросмотр рассылки:\n\n{text}\n\n"
-        f"Кому: <b>{html.escape(mode_label)}</b> — получателей: {target_count}.\n"
-        "Отправить?"
-    )
+def bcast_recipient_label(recipient: dict, count: int) -> str:
+    """One line of the recipient list: what it is and how many deliveries it adds."""
+    kind = str(recipient.get("kind", ""))
+    if kind in BCAST_PRESET_LABELS:
+        label = BCAST_PRESET_LABELS[kind]
+    elif kind == "user":
+        label = f"👤 {recipient.get('label') or recipient.get('id')}"
+    elif kind == "chat":
+        label = f"🧩 {recipient.get('label') or recipient.get('id')}"
+    else:
+        label = "❓ неизвестный получатель"
+    return f"{label} — {count}"
+
+
+def _bcast_text_preview(text: str | None, limit: int = 400) -> list[str]:
+    if not text:
+        return ["✏️ Текст письма: пока пусто"]
+    snippet = text if len(text) <= limit else f"{text[:limit]}…"
+    return ["✏️ Текст письма:", snippet]
+
+
+def admin_bcast_composer(lines: list[str], text: str | None, total: int) -> str:
+    """Main broadcast screen: the letter being written and its recipient list."""
+    body = ["✉️ <b>Рассылка</b>", ""]
+    if lines:
+        body.append(f"Получатели ({len(lines)}):")
+        body.extend(f"• {line}" for line in lines)
+    else:
+        body.append("Получатели: пока никого")
+    body.append(f"Итого доставок: {total}")
+    body.append("")
+    body.extend(_bcast_text_preview(text))
+    return "\n".join(body)
+
+
+def admin_bcast_recipients_screen(lines: list[str], total: int) -> str:
+    body = ["👥 <b>Получатели рассылки</b>", ""]
+    if lines:
+        body.extend(f"• {line}" for line in lines)
+        body.append(f"\nИтого доставок: {total}")
+    else:
+        body.append("Список пуст. Добавь группы, ЛС или конкретных людей.")
+    return "\n".join(body)
+
+
+def admin_bcast_target_text(text: str, lines: list[str], total: int) -> str:
+    """Send-ready preview: exactly what lands in the chats, plus a summary."""
+    summary = ", ".join(lines) if lines else "никого"
+    return f"👁 <b>Так увидят получатели</b>\n\n{text}\n\nКому: {summary}\nИтого доставок: {total}"
+
+
+def admin_bcast_target_added(label: str, count: int) -> str:
+    return f"➕ {label}: {count} доставок"
+
+
+def admin_bcast_no_targets() -> str:
+    return "Сначала добавь хотя бы одного получателя."
+
+
+def admin_bcast_no_text() -> str:
+    return "Сначала напиши текст письма."
+
+
+def admin_bcast_lookup_failed(raw: str) -> str:
+    return f"Не нашёл получателя «{html.escape(raw)}». Нужен @username или числовой ID."
+
+
+def admin_bcast_too_long(limit: int) -> str:
+    return f"Слишком длинный текст: Telegram принимает до {limit} символов."
 
 
 def admin_bcast_done(sent: int, failed: int) -> str:

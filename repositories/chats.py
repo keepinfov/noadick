@@ -95,7 +95,14 @@ def _active_cutoff(active_days: int) -> int:
 
 
 async def chat_ids_by_mode(mode: str, active_days: int = ACTIVE_DAYS_DEFAULT) -> list[int]:
-    """Delivery targets for one broadcast.
+    """Delivery ids for one broadcast mode (groups first, then DM users)."""
+    return [chat_id for chat_id, _is_dm in await broadcast_targets(mode, active_days)]
+
+
+async def broadcast_targets(
+    mode: str, active_days: int = ACTIVE_DAYS_DEFAULT
+) -> list[tuple[int, bool]]:
+    """``(chat_id, is_dm)`` deliveries for one broadcast mode.
 
     Groups come from the registered chats; direct messages come from the users
     who opened a DM, because a private chat is never a chat. Modes:
@@ -118,12 +125,14 @@ async def chat_ids_by_mode(mode: str, active_days: int = ACTIVE_DAYS_DEFAULT) ->
                 stmt = stmt.where(Chat.chat_id.in_(recent))
             groups = [int(cid) for cid in (await session.execute(stmt)).scalars().all()]
 
+    targets: list[tuple[int, bool]] = [(chat_id, False) for chat_id in groups]
     if mode not in {"dm", "all", "active"}:
-        return groups
+        return targets
 
     users = await dm_user_ids(active_days if mode == "active" else None)
     seen = set(groups)
-    return groups + [uid for uid in users if uid not in seen]
+    targets.extend((user_id, True) for user_id in users if user_id not in seen)
+    return targets
 
 
 async def mark_dm_started(user_id: int, now: int | None = None) -> bool:
@@ -235,6 +244,20 @@ async def get_user(user_id: int) -> User | None:
     factory = get_session_factory()
     async with factory() as session:
         return await session.get(User, user_id)
+
+
+async def get_user_by_username(username: str) -> User | None:
+    """Look a user up by Telegram handle (stored without the leading @)."""
+    handle = username.lstrip("@").strip()
+    if not handle:
+        return None
+    factory = get_session_factory()
+    async with factory() as session:
+        return (
+            await session.execute(
+                select(User).where(func.lower(User.username) == handle.lower()).limit(1)
+            )
+        ).scalar_one_or_none()
 
 
 async def set_user_banned(

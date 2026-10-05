@@ -285,12 +285,78 @@ async def unban_chat(actor_id: int, chat_id: int) -> ActionResult:
     return ActionResult(ok, texts.res_chat_unbanned(chat_id) if ok else texts.RES_CHAT_NOT_FOUND)
 
 
-async def broadcast_targets(mode: str = "all", active_days: int | None = None) -> list[int]:
-    """Chat ids for a broadcast, filtered by target mode (excludes banned chats).
-    Sending is done by the caller, which has access to the bot instance."""
-    if active_days is None:
-        return await chats_repo.chat_ids_by_mode(mode)
-    return await chats_repo.chat_ids_by_mode(mode, active_days=active_days)
+@dataclass(frozen=True)
+class DeliveryTarget:
+    """One concrete broadcast delivery: a group (topic resolved later) or a DM."""
+
+    chat_id: int
+    is_dm: bool
+
+
+# Recipient kinds a composer draft may hold. The four presets map onto the
+# repository modes; "user" and "chat" are explicit picks.
+PRESET_RECIPIENTS = ("groups", "dm", "active", "all")
+RECIPIENT_KINDS = PRESET_RECIPIENTS + ("user", "chat")
+
+
+async def resolve_broadcast_targets(
+    recipients: list[dict], active_days: int
+) -> list[DeliveryTarget]:
+    """Expand a composer draft into deduplicated deliveries.
+
+    Presets are resolved at send time, so a group added meanwhile is included
+    and a banned one is skipped; explicit picks are used as given.
+    """
+    targets: list[DeliveryTarget] = []
+    seen: set[int] = set()
+
+    def add(chat_id: int, is_dm: bool) -> None:
+        if chat_id and chat_id not in seen:
+            seen.add(chat_id)
+            targets.append(DeliveryTarget(chat_id=chat_id, is_dm=is_dm))
+
+    for item in recipients:
+        kind = str(item.get("kind", ""))
+        if kind in PRESET_RECIPIENTS:
+            for chat_id, is_dm in await chats_repo.broadcast_targets(kind, active_days):
+                add(chat_id, is_dm)
+        elif kind == "user":
+            add(int(item.get("id", 0)), True)
+        elif kind == "chat":
+            add(int(item.get("id", 0)), False)
+    return targets
+
+
+async def count_recipient(item: dict, active_days: int) -> int:
+    """How many deliveries one recipient adds on its own (for the panel)."""
+    return len(await resolve_broadcast_targets([item], active_days))
+
+
+async def find_user_target(raw: str) -> tuple[int, str] | None:
+    """Resolve ``@username`` or a numeric id into ``(user_id, display name)``."""
+    value = raw.strip()
+    if not value:
+        return None
+    if value.lstrip("-").isdigit():
+        user_id = int(value)
+        user = await chats_repo.get_user(user_id)
+        name = user.first_name if user and user.first_name else str(user_id)
+        return user_id, name
+    user = await chats_repo.get_user_by_username(value.lstrip("@"))
+    if user is None:
+        return None
+    return user.user_id, user.first_name or str(user.user_id)
+
+
+async def find_chat_target(raw: str) -> tuple[int, str] | None:
+    """Resolve a numeric chat id into ``(chat_id, title)``."""
+    value = raw.strip()
+    if not value.lstrip("-").isdigit():
+        return None
+    chat_id = int(value)
+    chat = await chats_repo.get_chat(chat_id)
+    title = chat.title if chat and chat.title else str(chat_id)
+    return chat_id, title
 
 
 async def log_broadcast(
